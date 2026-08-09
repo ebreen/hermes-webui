@@ -11,9 +11,12 @@ import logging
 import os
 import re
 import secrets
+import stat
 import tempfile
 import threading
 import time
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from api.config import STATE_DIR, get_config, load_settings
@@ -1242,3 +1245,530 @@ def set_auth_cookie(handler, cookie_value) -> None:
 def clear_auth_cookie(handler) -> None:
     """Clear the auth cookie on the response."""
     handler.send_header('Set-Cookie', _clear_auth_cookie_header())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Read-only raw-memory seams (hermex #58, PR 0) — contract §5 / §7 / §8
+#
+# These seams are PURE and DETACHED: they read the authoritative on-disk state
+# directly (environment, STATE_DIR/settings.json, profile config.yaml files,
+# STATE_DIR/.signing_key, STATE_DIR/.sessions.json, STATE_DIR/passkeys.json)
+# with bounded no-follow regular-file semantics and never mutate any state —
+# no key generation, no session mint/prune/persist/refresh/revoke, no cookie
+# queueing, no discovery/alias caches, no directory creation, no
+# profile-registry refresh, no request-profile TLS mutation, and no
+# consultation of the process active profile. They exist for PR 0 only; the
+# raw route (PR 2) consumes them. PR 0 adds no route, no dispatch, and no
+# capability field.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Tri-state results of read_only_auth_enabled() (§7).
+AUTH_ENABLED = 'auth_enabled'
+AUTH_DISABLED = 'auth_disabled'
+AUTH_STATE_UNAVAILABLE = 'auth_state_unavailable'
+
+# Per-member posture results (internal).
+_READ_ONLY_ENABLED = 'enabled'
+_READ_ONLY_DISABLED = 'disabled'
+_READ_ONLY_UNAVAILABLE = 'unavailable'
+
+# Per-config-file read outcomes (internal).
+_CFG_MISSING = 'missing'
+_CFG_OK = 'ok'
+_CFG_UNREADABLE = 'unreadable'
+
+# Bounded-read caps for the no-follow regular-file reader. Oversized files
+# fail closed (treated as unreadable) rather than being partially trusted.
+_READ_ONLY_MAX_SETTINGS_BYTES = 4 * 1024 * 1024
+_READ_ONLY_MAX_CONFIG_BYTES = 4 * 1024 * 1024
+_READ_ONLY_MAX_SESSIONS_BYTES = 8 * 1024 * 1024
+_READ_ONLY_MAX_PASSKEYS_BYTES = 4 * 1024 * 1024
+_READ_ONLY_MAX_SIGNING_KEY_BYTES = 4096
+
+
+@dataclass(frozen=True)
+class AuthorizedRawProfileContext:
+    """The single immutable per-request authorization context (§5 of #58).
+
+    Carries only the normalized bound profile name, the resolved absolute
+    Profile home ``Path``, the validated incoming session identifier, and an
+    optional read-only view of the validated session record. It must never
+    carry cookie values, keys, or raw source bytes. It is never stored in a
+    module global, thread-local, or process-TLS slot; it lives only on the raw
+    request's call stack and is passed by parameter into every pure resolver.
+    """
+
+    bound_profile: str
+    profile_home: Path
+    auth_session_id: str
+    session_record_view: Mapping[str, object] | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.bound_profile, str) or not self.bound_profile.strip():
+            raise ValueError('bound_profile must be a non-empty profile name')
+        if not isinstance(self.auth_session_id, str) or not self.auth_session_id.strip():
+            raise ValueError('auth_session_id must be a non-empty session identifier')
+        if not isinstance(self.profile_home, Path):
+            raise ValueError('profile_home must be a Path')
+        object.__setattr__(self, 'bound_profile', self.bound_profile.strip())
+        object.__setattr__(self, 'auth_session_id', self.auth_session_id.strip())
+        object.__setattr__(self, 'profile_home', self.profile_home.expanduser().resolve())
+
+
+def _read_regular_file_no_follow(path: Path, max_bytes: int) -> bytes | None:
+    """Read a regular file with bounded, no-follow semantics.
+
+    Returns the file bytes (``len <= max_bytes``) or ``None`` when the path is
+    missing, is not a regular file (symlink, directory, FIFO, device), cannot
+    be opened, is replaced/rotated between stat and read, or exceeds the
+    bound. Pre/post identity checks compare ``(st_dev, st_ino)`` against the
+    initial lstat so a concurrent replacement fails closed. Never creates,
+    writes, or repairs anything.
+    """
+    try:
+        st_before = path.lstat()
+    except OSError:
+        return None
+    if not stat.S_ISREG(st_before.st_mode):
+        return None
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return None
+    try:
+        st_fd = os.fstat(fd)
+        if not stat.S_ISREG(st_fd.st_mode):
+            return None
+        if (st_fd.st_dev, st_fd.st_ino) != (st_before.st_dev, st_before.st_ino):
+            return None
+        chunks = []
+        total = 0
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                return None
+            chunks.append(chunk)
+        st_after = os.fstat(fd)
+        if (st_after.st_dev, st_after.st_ino) != (st_before.st_dev, st_before.st_ino):
+            return None
+        return b''.join(chunks)
+    except OSError:
+        return None
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def _read_only_signing_key() -> bytes | None:
+    """Direct no-follow read of the authoritative ``STATE_DIR/.signing_key``.
+
+    Preserves the existing 32-byte / first-32-byte compatibility rule. A
+    missing, short, symlinked, unreadable, or otherwise invalid key fails
+    closed (``None``) and never generates or writes a replacement. The key is
+    authoritative per call: no raw-route key cache or stale in-memory
+    fallback is permitted.
+    """
+    raw = _read_regular_file_no_follow(
+        STATE_DIR / '.signing_key', _READ_ONLY_MAX_SIGNING_KEY_BYTES
+    )
+    if raw is None or len(raw) < 32:
+        return None
+    return raw[:32]
+
+
+def _read_only_session_expiry(record) -> float | None:
+    """Mirror of ``_session_expiry()`` kept inside the seam for detachment."""
+    if isinstance(record, dict):
+        expiry = record.get('expiry', record.get('expires_at'))
+    else:
+        expiry = record
+    try:
+        return float(expiry)
+    except (TypeError, ValueError):
+        return None
+
+
+def _read_only_sessions_store() -> dict | None:
+    """Direct no-follow read of ``STATE_DIR/.sessions.json``.
+
+    Never calls ``_load_sessions()`` (which prunes and persists) or
+    ``_save_sessions()``. A missing, unreadable, malformed, non-dict, or
+    replaced store returns ``None`` (fail closed) without pruning, persisting,
+    refreshing, or mutating the in-process ``_sessions`` table.
+    """
+    raw = _read_regular_file_no_follow(
+        STATE_DIR / '.sessions.json', _READ_ONLY_MAX_SESSIONS_BYTES
+    )
+    if raw is None:
+        return None
+    try:
+        data = json.loads(raw.decode('utf-8'))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def read_only_incoming_cookie_session_info(cookie_value: str) -> dict | None:
+    """Validate the exact incoming auth cookie (§8).
+
+    Reads the exact incoming cookie value against ONE direct signing-key
+    snapshot and ONE direct on-disk ``STATE_DIR/.sessions.json`` snapshot.
+    Accepts the current 64-character signature and the accepted legacy
+    32-character truncated form. Checks expiry. Returns a detached bound-session
+    info record ``{'token', 'expiry', 'auth_type', 'username',
+    'bound_profile'}`` or ``None``.
+
+    Never calls ``_prune_expired_sessions()``, removes an expired record,
+    persists the session store, refreshes/rotates a session, mints a cookie,
+    queues or flushes ``Set-Cookie``, populates or invalidates an
+    auth/session/key cache, or performs any other state mutation. Never calls
+    the mutating ``verify_session()`` or ``get_session_info()``.
+    """
+    if not cookie_value or '.' not in cookie_value:
+        return None
+    token, sig = cookie_value.rsplit('.', 1)
+    if not token or not sig:
+        return None
+    key = _read_only_signing_key()
+    if key is None:
+        return None
+    full_sig = hmac.new(key, token.encode(), hashlib.sha256).hexdigest()
+    valid = hmac.compare_digest(sig, full_sig) or (
+        len(sig) == 32 and hmac.compare_digest(sig, full_sig[:32])
+    )
+    if not valid:
+        return None
+    with _SESSIONS_LOCK:
+        data = _read_only_sessions_store()
+    if data is None:
+        return None
+    record = data.get(token)
+    if record is None:
+        return None
+    expiry = _read_only_session_expiry(record)
+    if expiry is None or time.time() > expiry:
+        return None
+    info: dict[str, object] = {'token': token, 'expiry': expiry}
+    if isinstance(record, dict):
+        info.update({k: v for k, v in record.items() if k != 'expiry'})
+    if 'bound_profile' not in info and isinstance(info.get('profile'), str):
+        info['bound_profile'] = info.get('profile')
+    info.setdefault('auth_type', None)
+    info.setdefault('username', None)
+    info.setdefault('bound_profile', None)
+    return info
+
+
+def read_only_verify_profile_cookie(
+    cookie_value: str, session_cookie_value: str | None
+) -> str | None:
+    """Pure companion seam for signed profile-cookie verification (§8).
+
+    Uses the same token/HMAC input as ``sign_profile_cookie_value()``
+    (HMAC-SHA256 over ``b'profile:<token>:<name>'`` with the direct signing
+    key) and returns a detached comparison result only. It must not call
+    ``get_profile_cookie()``, ``get_profile_cookie_name()``, ``parse_cookie()``,
+    ``verify_profile_cookie_value()``, ``verify_session()``,
+    ``get_session_info()``, or any helper that can generate a key,
+    prune/persist sessions, queue cookies, populate alias/discovery caches,
+    warning-once state, or switch the process-global Profile. This seam
+    performs no TLS profile mutation of any kind.
+    """
+    if not cookie_value or '.' not in cookie_value:
+        return None
+    if not session_cookie_value or '.' not in session_cookie_value:
+        return None
+    profile_name, sig = cookie_value.rsplit('.', 1)
+    token, _session_sig = session_cookie_value.rsplit('.', 1)
+    if not profile_name or not sig or not token:
+        return None
+    from api.profiles import _PROFILE_ID_RE
+
+    if profile_name != 'default' and not _PROFILE_ID_RE.fullmatch(profile_name):
+        return None
+    key = _read_only_signing_key()
+    if key is None:
+        return None
+    expected = hmac.new(
+        key, f'profile:{token}:{profile_name}'.encode(), hashlib.sha256
+    ).hexdigest()
+    if hmac.compare_digest(str(sig), expected):
+        return profile_name
+    return None
+
+
+def _read_only_profiles_root() -> Path:
+    """Canonical profile registry root (base home / ``profiles``).
+
+    Mirrors ``api.profiles._profiles_root()`` without touching any profile
+    registry cache, alias cache, or refresh path.
+    """
+    from api import profiles as _profiles
+
+    return (Path(_profiles._DEFAULT_HERMES_HOME) / 'profiles').resolve()
+
+
+def _read_only_profile_scopes() -> list[tuple[str, Path]]:
+    """Direct enumeration of profile homes under the registry root (§7).
+
+    The root profile scope is the base home itself; every immediate child of
+    the registry root that is a real directory (lstat, no symlink following)
+    is a named-profile scope. No discovery caches, no alias caches, no
+    ``_profiles_match()`` alias population, no directory creation, no
+    migration, and no profile-registry refresh. A missing registry root
+    contributes no named scopes.
+    """
+    from api import profiles as _profiles
+
+    base = Path(_profiles._DEFAULT_HERMES_HOME)
+    scopes: list[tuple[str, Path]] = [('default', base)]
+    try:
+        entries = sorted(_read_only_profiles_root().iterdir())
+    except OSError:
+        entries = []
+    for entry in entries:
+        try:
+            if stat.S_ISDIR(entry.lstat().st_mode):
+                scopes.append((entry.name, entry))
+        except OSError:
+            continue
+    return scopes
+
+
+def _read_only_profile_config(home: Path) -> tuple[str, dict]:
+    """Read one profile home's ``config.yaml`` with bounded no-follow reads.
+
+    Returns ``(_CFG_MISSING, {})`` when the file is absent (readable, no
+    posture), ``(_CFG_OK, cfg)`` for a valid YAML mapping, or
+    ``(_CFG_UNREADABLE, {})`` for symlink/non-regular/oversized/unreadable/
+    malformed/non-mapping state (fail closed).
+    """
+    path = home / 'config.yaml'
+    try:
+        st = path.lstat()
+    except FileNotFoundError:
+        return _CFG_MISSING, {}
+    except OSError:
+        return _CFG_UNREADABLE, {}
+    if not stat.S_ISREG(st.st_mode):
+        return _CFG_UNREADABLE, {}
+    raw = _read_regular_file_no_follow(path, _READ_ONLY_MAX_CONFIG_BYTES)
+    if raw is None:
+        return _CFG_UNREADABLE, {}
+    try:
+        import yaml
+
+        loaded = yaml.safe_load(raw.decode('utf-8'))
+    except Exception:
+        return _CFG_UNREADABLE, {}
+    if loaded is None:
+        return _CFG_OK, {}
+    if not isinstance(loaded, dict):
+        return _CFG_UNREADABLE, {}
+    return _CFG_OK, loaded
+
+
+def _read_only_bool_string(value: str) -> bool | None:
+    """Parse a passkey flag string; ``None`` means malformed (fail closed)."""
+    normalized = value.strip().lower()
+    if normalized in {'1', 'true', 'yes', 'on'}:
+        return True
+    if normalized in {'0', 'false', 'no', 'off'}:
+        return False
+    return None
+
+
+def _read_only_passkey_flag(cfg: dict) -> bool | None:
+    """Passkey feature flag for one scope: env wins, then ``config.yaml``.
+
+    ``None`` means the configured value is malformed (fail closed).
+    """
+    env_value = os.getenv('HERMES_WEBUI_PASSKEY', '')
+    if env_value:
+        return _read_only_bool_string(env_value)
+    raw = cfg.get('webui_passkey_enabled')
+    if raw is None:
+        return False
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        return _read_only_bool_string(raw)
+    return None
+
+
+def _read_only_passkey_credentials() -> bool | None:
+    """Direct read of ``STATE_DIR/passkeys.json``.
+
+    ``True`` when at least one credential is registered; ``False`` when the
+    store is absent or empty (readable); ``None`` when the store is
+    unreadable or malformed (fail closed).
+    """
+    path = STATE_DIR / 'passkeys.json'
+    try:
+        st = path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
+    if not stat.S_ISREG(st.st_mode):
+        return None
+    raw = _read_regular_file_no_follow(path, _READ_ONLY_MAX_PASSKEYS_BYTES)
+    if raw is None:
+        return None
+    try:
+        data = json.loads(raw.decode('utf-8'))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, list):
+        return None
+    return any(
+        isinstance(entry, dict) and isinstance(entry.get('id'), str) and entry.get('id')
+        for entry in data
+    )
+
+
+def _read_only_passkey_posture(cfg: dict) -> str:
+    flag = _read_only_passkey_flag(cfg)
+    if flag is None:
+        return _READ_ONLY_UNAVAILABLE
+    if not flag:
+        return _READ_ONLY_DISABLED
+    credentials = _read_only_passkey_credentials()
+    if credentials is None:
+        return _READ_ONLY_UNAVAILABLE
+    return _READ_ONLY_ENABLED if credentials else _READ_ONLY_DISABLED
+
+
+def _read_only_oidc_posture(cfg: dict) -> str:
+    """OIDC posture for one scope.
+
+    Enabled only when all four fields (issuer, client_id, allow_claim,
+    allow_values) are set; partially configured or malformed security state
+    is ``unavailable`` (fail closed, never disabled).
+    """
+    raw = cfg.get('webui_oidc')
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        return _READ_ONLY_UNAVAILABLE
+
+    def pick(name: str, env_name: str) -> str:
+        env_value = os.getenv(env_name)
+        value = env_value if env_value is not None else raw.get(name)
+        return str(value or '').strip()
+
+    issuer = pick('issuer', 'HERMES_WEBUI_OIDC_ISSUER')
+    client_id = pick('client_id', 'HERMES_WEBUI_OIDC_CLIENT_ID')
+    allow_claim = pick('allow_claim', 'HERMES_WEBUI_OIDC_ALLOW_CLAIM')
+    allow_env = os.getenv('HERMES_WEBUI_OIDC_ALLOW_VALUES')
+    allow_values = allow_env if allow_env is not None else raw.get('allow_values')
+    allow_values = str(allow_values or '').strip()
+    present = [issuer, client_id, allow_claim, allow_values]
+    if all(present):
+        return _READ_ONLY_ENABLED
+    if any(present):
+        return _READ_ONLY_UNAVAILABLE  # partially configured security state
+    return _READ_ONLY_DISABLED
+
+
+def _read_only_password_env_posture() -> str:
+    return (
+        _READ_ONLY_ENABLED
+        if os.getenv('HERMES_WEBUI_PASSWORD', '').strip()
+        else _READ_ONLY_DISABLED
+    )
+
+
+def _read_only_settings_hash_posture() -> str:
+    """Configured non-empty password hash in ``STATE_DIR/settings.json``.
+
+    Missing file is readable-disabled. Unreadable, symlinked, malformed,
+    non-dict, or non-string hash values are ``unavailable`` (fail closed).
+    """
+    path = STATE_DIR / 'settings.json'
+    try:
+        st = path.lstat()
+    except FileNotFoundError:
+        return _READ_ONLY_DISABLED
+    except OSError:
+        return _READ_ONLY_UNAVAILABLE
+    if not stat.S_ISREG(st.st_mode):
+        return _READ_ONLY_UNAVAILABLE
+    raw = _read_regular_file_no_follow(path, _READ_ONLY_MAX_SETTINGS_BYTES)
+    if raw is None:
+        return _READ_ONLY_UNAVAILABLE
+    try:
+        data = json.loads(raw.decode('utf-8'))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _READ_ONLY_UNAVAILABLE
+    if not isinstance(data, dict):
+        return _READ_ONLY_UNAVAILABLE
+    value = data.get('password_hash')
+    if value is None:
+        return _READ_ONLY_DISABLED
+    if isinstance(value, str):
+        return _READ_ONLY_ENABLED if value else _READ_ONLY_DISABLED
+    return _READ_ONLY_UNAVAILABLE
+
+
+def _read_only_trusted_header_posture() -> str:
+    return (
+        _READ_ONLY_ENABLED
+        if os.getenv('HERMES_WEBUI_TRUSTED_AUTH_HEADER', '').strip()
+        else _READ_ONLY_DISABLED
+    )
+
+
+def read_only_auth_enabled() -> str:
+    """Fail-closed tri-state deployment-wide auth union (§7).
+
+    Returns exactly one of ``AUTH_ENABLED``, ``AUTH_DISABLED``,
+    ``AUTH_STATE_UNAVAILABLE``.
+
+    The union covers (a) ``HERMES_WEBUI_PASSWORD``, (b) the configured
+    password hash in ``STATE_DIR/settings.json``, (c) the root profile
+    ``config.yaml``, and (d) every named-profile ``config.yaml`` enumerated
+    DIRECTLY under the profile registry root — no discovery caches, no alias
+    caches, no ``_profiles_match()`` population, no directory creation, no
+    migration, no profile-registry refresh.
+
+    Postures are evaluated in precedence order: password (env) > configured
+    password hash > passkey > OIDC > trusted-header. The union is the OR of
+    all readable states: ``AUTH_ENABLED`` when any readable posture is enabled
+    anywhere in the union; ``AUTH_DISABLED`` only when every union member is
+    readable and all are disabled. Unreadable, malformed, or partially
+    configured security state in the global scope or ANY profile home is
+    ``AUTH_STATE_UNAVAILABLE`` — never ``AUTH_DISABLED``; a state of "unknown"
+    is never treated as "disabled" and never silently ignored.
+
+    This seam never generates or loads keys (``_load_key``/``_pbkdf2_key``/
+    ``_signing_key``), never hashes a password, never populates
+    ``_AUTH_HASH_CACHE``/``_PBKDF2_KEY_CACHE``/``_SIGNING_KEY_CACHE`` or any
+    settings/config cache, never writes or migrates settings/config, never
+    consults the process active profile, and never touches the request-profile
+    TLS slot.
+    """
+    postures = [
+        # Precedence: password (env) > configured password hash.
+        _read_only_password_env_posture(),
+        _read_only_settings_hash_posture(),
+    ]
+    for _name, home in _read_only_profile_scopes():
+        status, cfg = _read_only_profile_config(home)
+        if status == _CFG_UNREADABLE:
+            return AUTH_STATE_UNAVAILABLE
+        postures.append(_read_only_passkey_posture(cfg))
+        postures.append(_read_only_oidc_posture(cfg))
+    # Precedence tail: trusted-header.
+    postures.append(_read_only_trusted_header_posture())
+    if any(p == _READ_ONLY_UNAVAILABLE for p in postures):
+        return AUTH_STATE_UNAVAILABLE
+    if any(p == _READ_ONLY_ENABLED for p in postures):
+        return AUTH_ENABLED
+    return AUTH_DISABLED
