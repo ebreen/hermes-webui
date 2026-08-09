@@ -3202,7 +3202,19 @@ def get_effective_default_model(config_data: dict | None = None) -> str:
 # importing from the agent tree (which may not be installed).  Any drift here
 # will show up in the shared test suite since both sides accept the same set.
 # Keep this WebUI-visible set aligned with hermes-agent#29248.
-VALID_REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max")
+# Keep this WebUI-visible set aligned with Hermes Agent. ``max`` and ``ultra``
+# are model-specific Codex levels; generic capability fallbacks stay capped at
+# ``xhigh`` and only expose the higher levels when authoritative metadata does.
+VALID_REASONING_EFFORTS = (
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "ultra",
+)
+_DEFAULT_REASONING_EFFORTS = VALID_REASONING_EFFORTS[:5]
 
 
 def parse_reasoning_effort(effort):
@@ -3533,14 +3545,14 @@ def _filter_reasoning_efforts_for_provider(
         if bare.startswith(("o1", "o3", "o4")):
             return [eff for eff in normalized if eff in {"low", "medium", "high"}]
         if bare.startswith("gpt-5"):
-            return [eff for eff in normalized if eff != "max"]
+            return [eff for eff in normalized if eff not in {"max", "ultra"}]
     # 'max' is a WebUI-level ceiling; providers whose native ladder tops out lower
     # must NOT advertise it, otherwise a stored/CLI 'max' degrades WORSE than the
     # prior max->xhigh coercion (Gemini's adapter treats unknown 'max' as medium;
     # pre-adaptive Anthropic manual-thinking lacks a 'max' budget and falls to 8k).
     # Dropping 'max' here lets the existing downgrade ladder land on xhigh/high.
     if provider in {"gemini", "google", "google-gemini", "google-vertex", "vertex"}:
-        return [eff for eff in normalized if eff != "max"]
+        return [eff for eff in normalized if eff not in {"max", "ultra"}]
     # Legacy Claude is pre-adaptive whether served natively OR via Azure Foundry /
     # Bedrock / Vertex — the ceiling follows the MODEL, not just the provider name.
     _anthropic_lanes = {
@@ -3549,7 +3561,7 @@ def _filter_reasoning_efforts_for_provider(
         "vertex", "google-vertex",
     }
     if provider in _anthropic_lanes and "claude" in bare and _is_pre_adaptive_anthropic(bare):
-        return [eff for eff in normalized if eff != "max"]
+        return [eff for eff in normalized if eff not in {"max", "ultra"}]
     # Z.AI / GLM native-endpoint gate: see _zai_glm_reasoning_efforts_supported.
     # True → keep the full ladder (GLM-5.2+); False → strip it entirely (pre-5.2
     # GLM and forced-thinking GLM-4.7); None → not a zai GLM case, defer.
@@ -3620,6 +3632,45 @@ def _is_pre_adaptive_anthropic(bare_model: str) -> bool:
     return (major, minor) < (4, 6)
 
 
+def _codex_catalog_reasoning_efforts(model_id: str) -> list[str] | None:
+    """Return exact effort levels from Codex's authenticated model cache.
+
+    ``None`` means the cache is unavailable, malformed, or has no metadata for
+    the requested model. The caller then uses the existing safe fallbacks.
+    """
+    model = _strip_provider_hint_for_reasoning(model_id).lower()
+    if not model:
+        return None
+    codex_home = os.getenv("CODEX_HOME")
+    cache_path = (
+        Path(codex_home).expanduser() if codex_home else Path.home() / ".codex"
+    ) / "models_cache.json"
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    raw_models = payload.get("models") if isinstance(payload, dict) else None
+    if not isinstance(raw_models, list):
+        return None
+    for entry in raw_models:
+        if not isinstance(entry, dict):
+            continue
+        identity = str(entry.get("slug") or entry.get("id") or "").strip().lower()
+        if identity != model:
+            continue
+        raw_levels = entry.get("supported_reasoning_levels")
+        if not isinstance(raw_levels, list):
+            return None
+        efforts: list[str] = []
+        for raw_level in raw_levels:
+            raw_effort = raw_level.get("effort") if isinstance(raw_level, dict) else raw_level
+            effort = str(raw_effort or "").strip().lower()
+            if effort in VALID_REASONING_EFFORTS and effort not in efforts:
+                efforts.append(effort)
+        return efforts or None
+    return None
+
+
 def _heuristic_reasoning_efforts(model_id: str, provider_id: str) -> list[str]:
     """Fallback when hermes_cli is unavailable."""
     model = _strip_provider_hint_for_reasoning(model_id).lower()
@@ -3631,13 +3682,13 @@ def _heuristic_reasoning_efforts(model_id: str, provider_id: str) -> list[str]:
         if bare.startswith(("o1", "o3", "o4")):
             return ["low", "medium", "high"]
         return _filter_reasoning_efforts_for_provider(
-            list(VALID_REASONING_EFFORTS), model, provider
+            list(_DEFAULT_REASONING_EFFORTS), model, provider
         )
     if provider in {"copilot", "github-copilot"}:
         if bare.startswith(("gpt-5", "o1", "o3", "o4")):
             if bare.startswith(("o1", "o3", "o4")):
                 return ["low", "medium", "high"]
-            return list(VALID_REASONING_EFFORTS)
+            return list(_DEFAULT_REASONING_EFFORTS)
     prefixes = (
         "deepseek/",
         "anthropic/",
@@ -3650,15 +3701,40 @@ def _heuristic_reasoning_efforts(model_id: str, provider_id: str) -> list[str]:
         "xiaomi/",
     )
     if any(model.startswith(prefix) for prefix in prefixes):
-        return list(VALID_REASONING_EFFORTS)
+        return list(_DEFAULT_REASONING_EFFORTS)
     if _nested_gateway_route_reasoning(model):
-        return list(VALID_REASONING_EFFORTS)
+        return list(_DEFAULT_REASONING_EFFORTS)
+    # Z.AI / GLM native-endpoint models have authoritative capability metadata:
+    # GLM-5.2+ keeps the full ladder up to ``max`` exactly as the provider gate
+    # declares; ``ultra`` is Codex-only and stays out. Pre-5.2 forced-thinking
+    # models get no ladder. This outranks the name-based heuristic below (which
+    # would otherwise catch "glm" as a generic reasoning-capable family and cap
+    # it at the default).
+    zai_supports = _zai_glm_reasoning_efforts_supported(model, provider)
+    if zai_supports is True:
+        return [level for level in VALID_REASONING_EFFORTS if level != "ultra"]
+    if zai_supports is False:
+        return []
     # Named custom providers often rewrite model ids with dots, underscores, or
     # extra vendor namespaces. Normalize those shapes before applying family-level
     # reasoning heuristics so "deepseek.v3.2", "deepseek_v4_flash", and
     # "vendor.deepseek.v3.2" are treated consistently.
     if any(_candidate_supports_reasoning(candidate) for candidate in _reasoning_name_candidates(bare)):
-        return list(VALID_REASONING_EFFORTS)
+        # Claude and DeepSeek families genuinely support 'max' (adaptive Claude
+        # 4.6+ and DeepSeek keep it; the ceiling filter below drops it for
+        # pre-adaptive Claude). Every other reasoning-capable family stays
+        # capped at the default ladder so 'max'/'ultra' never leak to models
+        # whose providers reject them.
+        if bare.startswith(("claude", "deepseek")):
+            return _filter_reasoning_efforts_for_provider(
+                list(VALID_REASONING_EFFORTS), model, provider
+            )
+        # Non-GLM models routed through the native Z.AI endpoint are not gated
+        # by the GLM branch and keep the full ladder up to ``max`` (``ultra``
+        # remains Codex-only).
+        if provider == "zai":
+            return [level for level in VALID_REASONING_EFFORTS if level != "ultra"]
+        return list(_DEFAULT_REASONING_EFFORTS)
     return []
 
 
@@ -3689,7 +3765,7 @@ def _models_dev_reasoning_efforts(model_id: str, provider_id: str) -> list[str] 
     supports_reasoning = getattr(capabilities, "supports_reasoning", None)
     if supports_reasoning is True:
         return _filter_reasoning_efforts_for_provider(
-            list(VALID_REASONING_EFFORTS), model, provider
+            list(_DEFAULT_REASONING_EFFORTS), model, provider
         )
     if supports_reasoning is False:
         return []
@@ -3900,6 +3976,18 @@ def resolve_model_reasoning_efforts(
     # Preserve any explicit 'none' sentinel (valid UI option = "no reasoning");
     # the ceiling filter only knows the reasoning LEVELS.
     had_none = "none" in raw
+    # The Codex model catalog is account- and model-specific and its exact
+    # levels are authoritative: when the impl result IS the catalog's answer,
+    # skip the generic ceiling filter (which would otherwise strip max/ultra
+    # from gpt-5 models the catalog proves support them).
+    _prov = str(provider_id or "").strip().lower() if provider_id else ""
+    _hint = str(model_id or "").strip()
+    if _prov and _hint:
+        _prov = _resolve_provider_alias(_prov)
+        if _prov == "openai-codex":
+            _catalog = _codex_catalog_reasoning_efforts(_hint)
+            if _catalog is not None and [e for e in raw if e != "none"] == _catalog:
+                return raw
     filtered = _filter_reasoning_efforts_for_provider(
         [e for e in raw if e != "none"], str(model_id or ""), str(provider_id or "")
     )
@@ -3998,6 +4086,13 @@ def _resolve_model_reasoning_efforts_impl(
     except Exception:
         pass
 
+    # The Codex model catalog is account- and model-specific. Prefer its exact
+    # levels over broad models.dev booleans and name heuristics when available.
+    if provider == "openai-codex":
+        codex_efforts = _codex_catalog_reasoning_efforts(hinted_model)
+        if codex_efforts is not None:
+            return codex_efforts
+
     if provider in {"copilot", "github-copilot"}:
         try:
             from hermes_cli.models import github_model_reasoning_efforts
@@ -4076,6 +4171,15 @@ def coerce_reasoning_effort_for_model(
         provider_id=provider_id,
         base_url=base_url,
     )
+    # The Codex model catalog is authoritative for openai-codex: when it proves
+    # the requested level (e.g. max/ultra for gpt-5.6-sol), preserve it even
+    # though the generic gpt-5 ceiling below would otherwise strip it.
+    _prov = str(provider_id or "").strip().lower() if provider_id else ""
+    _hint = str(model_id or "").strip()
+    if _prov and _hint and _resolve_provider_alias(_prov) == "openai-codex":
+        _catalog = _codex_catalog_reasoning_efforts(_hint)
+        if _catalog is not None and raw in _catalog:
+            return raw
     # Hard provider ceilings must win regardless of what the sourced capability
     # list says. resolve_model_reasoning_efforts() draws from hermes_cli /
     # models.dev / heuristics, and those can (a) return [] for an unrecognized
@@ -4093,7 +4197,7 @@ def coerce_reasoning_effort_for_model(
         list(VALID_REASONING_EFFORTS), str(model_id or ""), str(provider_id or "")
     )
     if ceiling and raw not in ceiling:
-        ladder = list(VALID_REASONING_EFFORTS)  # ascending: minimal..xhigh..max
+        ladder = list(VALID_REASONING_EFFORTS)  # ascending: minimal..ultra
         try:
             raw_idx = ladder.index(raw)
         except ValueError:
@@ -4131,7 +4235,7 @@ def coerce_reasoning_effort_for_model(
     if not supported:
         if _zai_glm_reasoning_efforts_supported(model_id, provider_id) is False:
             return ""
-        if raw == "max" and not _provider_known_reasoning_capable(provider_id):
+        if raw in {"max", "ultra"} and not _provider_known_reasoning_capable(provider_id):
             return "xhigh"
         return raw
     if raw in supported:
@@ -4139,7 +4243,7 @@ def coerce_reasoning_effort_for_model(
     # Degrade to the closest *lower* supported level instead of silently
     # disabling reasoning. e.g. max -> xhigh -> high, or xhigh -> high when the
     # target model caps below the configured effort. Never escalate.
-    ladder = list(VALID_REASONING_EFFORTS)  # ascending: minimal..xhigh..max
+    ladder = list(VALID_REASONING_EFFORTS)  # ascending: minimal..ultra
     try:
         raw_idx = ladder.index(raw)
     except ValueError:
