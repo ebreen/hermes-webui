@@ -1,0 +1,451 @@
+diff --git a/api/config.py b/api/config.py
+index 9931748b..de3e0ecc 100644
+--- a/api/config.py
++++ b/api/config.py
+@@ -2975,8 +2975,19 @@ def get_effective_default_model(config_data: dict | None = None) -> str:
+ # Mirrors hermes_constants.parse_reasoning_effort so WebUI can validate without
+ # importing from the agent tree (which may not be installed).  Any drift here
+ # will show up in the shared test suite since both sides accept the same set.
+-# Keep this WebUI-visible set aligned with hermes-agent#29248.
+-VALID_REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")
++# Keep this WebUI-visible set aligned with Hermes Agent. ``max`` and ``ultra``
++# are model-specific Codex levels; generic capability fallbacks stay capped at
++# ``xhigh`` and only expose the higher levels when authoritative metadata does.
++VALID_REASONING_EFFORTS = (
++    "minimal",
++    "low",
++    "medium",
++    "high",
++    "xhigh",
++    "max",
++    "ultra",
++)
++_DEFAULT_REASONING_EFFORTS = VALID_REASONING_EFFORTS[:5]
+ 
+ 
+ def parse_reasoning_effort(effort):
+@@ -3200,10 +3211,49 @@ def _filter_reasoning_efforts_for_provider(
+         if bare.startswith(("o1", "o3", "o4")):
+             return [eff for eff in normalized if eff in {"low", "medium", "high"}]
+         if bare.startswith("gpt-5"):
+-            return [eff for eff in normalized if eff != "max"]
++            return [eff for eff in normalized if eff not in {"max", "ultra"}]
+     return normalized
+ 
+ 
++def _codex_catalog_reasoning_efforts(model_id: str) -> list[str] | None:
++    """Return exact effort levels from Codex's authenticated model cache.
++
++    ``None`` means the cache is unavailable, malformed, or has no metadata for
++    the requested model. The caller then uses the existing safe fallbacks.
++    """
++    model = _strip_provider_hint_for_reasoning(model_id).lower()
++    if not model:
++        return None
++    codex_home = os.getenv("CODEX_HOME")
++    cache_path = (
++        Path(codex_home).expanduser() if codex_home else Path.home() / ".codex"
++    ) / "models_cache.json"
++    try:
++        payload = json.loads(cache_path.read_text(encoding="utf-8"))
++    except (OSError, UnicodeError, json.JSONDecodeError):
++        return None
++    raw_models = payload.get("models") if isinstance(payload, dict) else None
++    if not isinstance(raw_models, list):
++        return None
++    for entry in raw_models:
++        if not isinstance(entry, dict):
++            continue
++        identity = str(entry.get("slug") or entry.get("id") or "").strip().lower()
++        if identity != model:
++            continue
++        raw_levels = entry.get("supported_reasoning_levels")
++        if not isinstance(raw_levels, list):
++            return None
++        efforts: list[str] = []
++        for raw_level in raw_levels:
++            raw_effort = raw_level.get("effort") if isinstance(raw_level, dict) else raw_level
++            effort = str(raw_effort or "").strip().lower()
++            if effort in VALID_REASONING_EFFORTS and effort not in efforts:
++                efforts.append(effort)
++        return efforts or None
++    return None
++
++
+ def _heuristic_reasoning_efforts(model_id: str, provider_id: str) -> list[str]:
+     """Fallback when hermes_cli is unavailable."""
+     model = _strip_provider_hint_for_reasoning(model_id).lower()
+@@ -3215,13 +3265,13 @@ def _heuristic_reasoning_efforts(model_id: str, provider_id: str) -> list[str]:
+         if bare.startswith(("o1", "o3", "o4")):
+             return ["low", "medium", "high"]
+         return _filter_reasoning_efforts_for_provider(
+-            list(VALID_REASONING_EFFORTS), model, provider
++            list(_DEFAULT_REASONING_EFFORTS), model, provider
+         )
+     if provider in {"copilot", "github-copilot"}:
+         if bare.startswith(("gpt-5", "o1", "o3", "o4")):
+             if bare.startswith(("o1", "o3", "o4")):
+                 return ["low", "medium", "high"]
+-            return list(VALID_REASONING_EFFORTS)
++            return list(_DEFAULT_REASONING_EFFORTS)
+     prefixes = (
+         "deepseek/",
+         "anthropic/",
+@@ -3234,15 +3284,15 @@ def _heuristic_reasoning_efforts(model_id: str, provider_id: str) -> list[str]:
+         "xiaomi/",
+     )
+     if any(model.startswith(prefix) for prefix in prefixes):
+-        return list(VALID_REASONING_EFFORTS)
++        return list(_DEFAULT_REASONING_EFFORTS)
+     if _nested_gateway_route_reasoning(model):
+-        return list(VALID_REASONING_EFFORTS)
++        return list(_DEFAULT_REASONING_EFFORTS)
+     # Named custom providers often rewrite model ids with dots, underscores, or
+     # extra vendor namespaces. Normalize those shapes before applying family-level
+     # reasoning heuristics so "deepseek.v3.2", "deepseek_v4_flash", and
+     # "vendor.deepseek.v3.2" are treated consistently.
+     if any(_candidate_supports_reasoning(candidate) for candidate in _reasoning_name_candidates(bare)):
+-        return list(VALID_REASONING_EFFORTS)
++        return list(_DEFAULT_REASONING_EFFORTS)
+     return []
+ 
+ 
+@@ -3273,7 +3323,7 @@ def _models_dev_reasoning_efforts(model_id: str, provider_id: str) -> list[str]
+     supports_reasoning = getattr(capabilities, "supports_reasoning", None)
+     if supports_reasoning is True:
+         return _filter_reasoning_efforts_for_provider(
+-            list(VALID_REASONING_EFFORTS), model, provider
++            list(_DEFAULT_REASONING_EFFORTS), model, provider
+         )
+     if supports_reasoning is False:
+         return []
+@@ -3517,6 +3567,13 @@ def resolve_model_reasoning_efforts(
+     except Exception:
+         pass
+ 
++    # The Codex model catalog is account- and model-specific. Prefer its exact
++    # levels over broad models.dev booleans and name heuristics when available.
++    if provider == "openai-codex":
++        codex_efforts = _codex_catalog_reasoning_efforts(hinted_model)
++        if codex_efforts is not None:
++            return codex_efforts
++
+     if provider in {"copilot", "github-copilot"}:
+         try:
+             from hermes_cli.models import github_model_reasoning_efforts
+@@ -3581,9 +3638,6 @@ def coerce_reasoning_effort_for_model(
+         return ""
+     if raw == "none":
+         return "none"
+-    accepts_max_as_xhigh = raw == "max"
+-    if accepts_max_as_xhigh:
+-        raw = "xhigh"
+     if raw not in VALID_REASONING_EFFORTS:
+         return ""
+     supported = resolve_model_reasoning_efforts(
+@@ -3598,18 +3652,18 @@ def coerce_reasoning_effort_for_model(
+     # model rejects (e.g. openai-codex gpt-5 'max', o1/o3/o4 above 'high') -
+     # those paths return a NON-empty clamped set, so the degrade ladder below
+     # still applies. When the set is empty we can't tell "unsupported" from
+-    # "unknown", so preserve the user's configured effort verbatim where it is
+-    # still valid. A stale 'max' value is no longer parser-valid on the WebUI
+-    # side, so degrade that unknown-model case to xhigh instead of silently
+-    # dropping reasoning later in parse_reasoning_effort(). (#3505 review)
++    # "unknown", so preserve ordinary effort levels verbatim. Keep the previous
++    # safe behavior for model-specific ``max``/``ultra`` values: without positive
++    # capability metadata, degrade them to ``xhigh`` rather than sending a level
++    # the provider may reject. (#3505 review)
+     if not supported:
+-        return "xhigh" if accepts_max_as_xhigh else raw
++        return "xhigh" if raw in {"max", "ultra"} else raw
+     if raw in supported:
+-        return "xhigh" if accepts_max_as_xhigh else raw
++        return raw
+     # Degrade to the closest *lower* supported level instead of silently
+     # disabling reasoning. e.g. max -> xhigh -> high, or xhigh -> high when the
+     # target model caps below the configured effort. Never escalate.
+-    ladder = list(VALID_REASONING_EFFORTS)  # ascending: minimal..xhigh
++    ladder = list(VALID_REASONING_EFFORTS)  # ascending: minimal..ultra
+     try:
+         raw_idx = ladder.index(raw)
+     except ValueError:
+@@ -3663,9 +3717,8 @@ def get_reasoning_status(
+         # Match CLI default (True if unset in config.yaml)
+         "show_reasoning": bool(show_raw) if isinstance(show_raw, bool) else True,
+         # Report the COERCED effort (not the raw config value) so boot/status/chip
+-        # read paths agree with what streaming actually sends — e.g. a stale
+-        # `reasoning_effort: max` surfaces as `xhigh`, not the now-unsupported `max`.
+-        # (Codex review of the drop-max alignment.)
++        # read paths agree with what streaming actually sends. Catalog-supported
++        # ``max``/``ultra`` values stay intact; unsupported ones degrade safely.
+         "reasoning_effort": coerce_reasoning_effort_for_model(
+             str(effort_raw or "").strip().lower(),
+             resolve_model,
+@@ -3784,7 +3837,8 @@ def set_reasoning_effort(
+     """Persist ``agent.reasoning_effort`` to the active profile's config.yaml.
+ 
+     Mirrors CLI ``/reasoning <level>``: same key, same valid values
+-    (``none`` | ``minimal`` | ``low`` | ``medium`` | ``high`` | ``xhigh``).
++    (``none`` | ``minimal`` | ``low`` | ``medium`` | ``high`` | ``xhigh`` |
++    ``max`` | ``ultra``).
+     Raises ``ValueError`` on an unrecognised level so callers can return 400.
+     """
+     raw = str(effort or "").strip().lower()
+diff --git a/static/commands.js b/static/commands.js
+index 631c7d2b..6f22a7d6 100644
+--- a/static/commands.js
++++ b/static/commands.js
+@@ -30,7 +30,7 @@ const COMMANDS=[
+   {name:'background',desc:t('cmd_background'),fn:cmdBackground,arg:'prompt',  noEcho:true},
+   {name:'status',    desc:t('cmd_status'),   fn:cmdStatus},
+   {name:'voice',     desc:t('cmd_voice'),    fn:cmdVoice,     noEcho:true},
+-  {name:'reasoning', desc:t('cmd_reasoning'), fn:cmdReasoning, arg:'show|hide|none|minimal|low|medium|high|xhigh', subArgs:['show','hide','none','minimal','low','medium','high','xhigh'], noEcho:true},
++  {name:'reasoning', desc:t('cmd_reasoning'), fn:cmdReasoning, arg:'show|hide|none|minimal|low|medium|high|xhigh|max|ultra', subArgs:['show','hide','none','minimal','low','medium','high','xhigh','max','ultra'], noEcho:true},
+   {name:'yolo', desc:t('cmd_yolo'), fn:cmdYolo, noEcho:true},
+   {name:'branch', desc:t('cmd_branch'), fn:cmdBranch, arg:'[name]', noEcho:true},
+ ];
+@@ -1593,13 +1593,13 @@ function cmdReasoning(args){
+   const BRAIN='\uD83E\uDDE0';
+   // Matches hermes_constants.VALID_REASONING_EFFORTS + 'none' (CLI parity).
+   // Keep this WebUI effort list in sync with hermes-agent#29248.
+-  const EFFORTS=['none','minimal','low','medium','high','xhigh'];
++  const EFFORTS=['none','minimal','low','medium','high','xhigh','max','ultra'];
+   // Shared status renderer used by the no-args branch and as a fallback.
+   function _fmtStatus(st){
+     const vis=(st && st.show_reasoning===false)?'off':'on';
+     const eff=(st && st.reasoning_effort)||'default';
+     return BRAIN+' Reasoning effort: '+eff+' \u00B7 display: '+vis
+-      +'  |  /reasoning show|hide|none|minimal|low|medium|high|xhigh';
++      +'  |  /reasoning show|hide|none|minimal|low|medium|high|xhigh|max|ultra';
+   }
+   if(!arg){
+     // Status — read from the same config.yaml keys the CLI uses.
+diff --git a/static/index.html b/static/index.html
+index 4d40fed8..a915882a 100644
+--- a/static/index.html
++++ b/static/index.html
+@@ -756,6 +756,8 @@
+             <div class="reasoning-option" data-effort="medium">Medium</div>
+             <div class="reasoning-option" data-effort="high">High</div>
+             <div class="reasoning-option" data-effort="xhigh">Extra High</div>
++            <div class="reasoning-option" data-effort="max">Max</div>
++            <div class="reasoning-option" data-effort="ultra">Ultra</div>
+           </div>
+           <div class="composer-toolsets-dropdown" id="composerToolsetsDropdown">
+             <div class="toolsets-dropdown-desc" id="toolsetsDropdownDesc"></div>
+diff --git a/static/ui.js b/static/ui.js
+index 170eb14e..af05cdd2 100644
+--- a/static/ui.js
++++ b/static/ui.js
+@@ -3805,6 +3805,8 @@ function _formatReasoningEffortLabel(effort){
+   if(effort==='medium') return 'Medium';
+   if(effort==='high') return 'High';
+   if(effort==='xhigh') return 'XHigh';
++  if(effort==='max') return 'Max';
++  if(effort==='ultra') return 'Ultra';
+   return effort.charAt(0).toUpperCase()+effort.slice(1);
+ }
+ 
+diff --git a/tests/test_issue1103_reasoning_chip_visibility.py b/tests/test_issue1103_reasoning_chip_visibility.py
+index 5c8ac758..a836c7ed 100644
+--- a/tests/test_issue1103_reasoning_chip_visibility.py
++++ b/tests/test_issue1103_reasoning_chip_visibility.py
+@@ -45,8 +45,11 @@ def test_reasoning_chip_html_starts_hidden():
+         src
+     )
+     assert m, "composerReasoningWrap must start with style='display:none'"
+-    assert 'data-effort="max"' not in src, (
+-        "composer reasoning dropdown must not include Max"
++    assert 'data-effort="max"' in src, (
++        "composer reasoning dropdown must include Max when the API advertises it"
++    )
++    assert 'data-effort="ultra"' in src, (
++        "composer reasoning dropdown must include Ultra when the API advertises it"
+     )
+ 
+ 
+diff --git a/tests/test_models_dev_reasoning.py b/tests/test_models_dev_reasoning.py
+index 29e615aa..85752a93 100644
+--- a/tests/test_models_dev_reasoning.py
++++ b/tests/test_models_dev_reasoning.py
+@@ -7,6 +7,12 @@ import pytest
+ from types import SimpleNamespace
+ 
+ 
++@pytest.fixture(autouse=True)
++def isolate_codex_catalog(tmp_path, monkeypatch):
++    """Keep models.dev tests independent from the developer's live Codex cache."""
++    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
++
++
+ def _install_fake_models_dev(monkeypatch, fake_fn):
+     fake_agent = types.ModuleType("agent")
+     fake_models_dev = types.ModuleType("agent.models_dev")
+@@ -16,7 +22,7 @@ def _install_fake_models_dev(monkeypatch, fake_fn):
+     monkeypatch.setitem(sys.modules, "agent.models_dev", fake_models_dev)
+ 
+ 
+-def test_models_dev_true_returns_full_efforts(monkeypatch):
++def test_models_dev_true_returns_default_efforts(monkeypatch):
+     _install_fake_models_dev(
+         monkeypatch,
+         lambda provider, model: SimpleNamespace(supports_reasoning=True),
+@@ -25,7 +31,7 @@ def test_models_dev_true_returns_full_efforts(monkeypatch):
+     import api.config as cfg
+ 
+     assert cfg._models_dev_reasoning_efforts("grok-4.3", "xai-oauth") == list(
+-        cfg.VALID_REASONING_EFFORTS
++        cfg._DEFAULT_REASONING_EFFORTS
+     )
+ 
+ 
+@@ -47,7 +53,7 @@ def test_models_dev_unknown_allows_compatibility_fallback(monkeypatch):
+ 
+     assert cfg.resolve_model_reasoning_efforts(
+         "x-ai/grok-4", provider_id="openrouter"
+-    ) == list(cfg.VALID_REASONING_EFFORTS)
++    ) == list(cfg._DEFAULT_REASONING_EFFORTS)
+ 
+ 
+ def test_xai_oauth_grok_uses_agent_metadata(monkeypatch):
+@@ -63,7 +69,7 @@ def test_xai_oauth_grok_uses_agent_metadata(monkeypatch):
+ 
+     assert cfg.resolve_model_reasoning_efforts(
+         "@xai-oauth:grok-4.3", provider_id="xai-oauth"
+-    ) == list(cfg.VALID_REASONING_EFFORTS)
++    ) == list(cfg._DEFAULT_REASONING_EFFORTS)
+     assert seen == [("xai-oauth", "grok-4.3")]
+ 
+ 
+@@ -150,5 +156,5 @@ display:
+     status = cfg.get_reasoning_status()
+ 
+     assert status["reasoning_effort"] == "medium"
+-    assert status["supported_efforts"] == list(cfg.VALID_REASONING_EFFORTS)
++    assert status["supported_efforts"] == list(cfg._DEFAULT_REASONING_EFFORTS)
+     assert status["supports_reasoning_effort"] is True
+diff --git a/tests/test_reasoning_effort_model_capabilities.py b/tests/test_reasoning_effort_model_capabilities.py
+index 503ef552..4c591349 100644
+--- a/tests/test_reasoning_effort_model_capabilities.py
++++ b/tests/test_reasoning_effort_model_capabilities.py
+@@ -1,8 +1,18 @@
+ """Tests for model-aware reasoning effort chip visibility."""
+ 
++import json
++
++import pytest
++
+ from api import config as cfg
+ 
+ 
++@pytest.fixture(autouse=True)
++def isolate_codex_catalog(tmp_path, monkeypatch):
++    """Keep capability tests independent from the developer's live Codex cache."""
++    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
++
++
+ def test_cursor_acp_models_do_not_support_reasoning_effort_levels():
+     assert cfg.resolve_model_reasoning_efforts(
+         "cursor/composer-2.5",
+@@ -40,6 +50,44 @@ def test_openai_codex_max_effort_is_clamped_before_streaming():
+     ) == "xhigh"
+ 
+ 
++def test_openai_codex_catalog_exposes_sol_max_and_ultra(tmp_path, monkeypatch):
++    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
++    (tmp_path / "models_cache.json").write_text(
++        json.dumps(
++            {
++                "models": [
++                    {
++                        "slug": "gpt-5.6-sol",
++                        "supported_reasoning_levels": [
++                            {"effort": effort}
++                            for effort in (
++                                "low",
++                                "medium",
++                                "high",
++                                "xhigh",
++                                "max",
++                                "ultra",
++                            )
++                        ],
++                    }
++                ]
++            }
++        ),
++        encoding="utf-8",
++    )
++    monkeypatch.setitem(cfg.cfg, "providers", {"openai-codex": {}})
++
++    assert cfg.resolve_model_reasoning_efforts(
++        "gpt-5.6-sol", provider_id="openai-codex"
++    ) == ["low", "medium", "high", "xhigh", "max", "ultra"]
++    assert cfg.coerce_reasoning_effort_for_model(
++        "max", "gpt-5.6-sol", provider_id="openai-codex"
++    ) == "max"
++    assert cfg.coerce_reasoning_effort_for_model(
++        "ultra", "gpt-5.6-sol", provider_id="openai-codex"
++    ) == "ultra"
++
++
+ def test_unsupported_xhigh_degrades_to_high_not_disabled():
+     # o1/o3/o4 on openai-codex cap at low/medium/high. A configured xhigh (or
+     # max) must clamp DOWN to the highest supported level (high), not silently
+diff --git a/tests/test_reasoning_show_hide.py b/tests/test_reasoning_show_hide.py
+index d1e2132f..f36253d0 100644
+--- a/tests/test_reasoning_show_hide.py
++++ b/tests/test_reasoning_show_hide.py
+@@ -271,7 +271,7 @@ class TestReasoningCommand:
+             )
+ 
+     def test_cmd_reasoning_routes_effort_through_api_reasoning(self):
+-        """Effort levels (none|minimal|low|medium|high|xhigh) must POST to
++        """Effort levels (none|minimal|low|medium|high|xhigh|max|ultra) must POST to
+         /api/reasoning so the agent's config.yaml agent.reasoning_effort is
+         updated — the same key the CLI writes via `/reasoning <level>`.
+         Previous design stored in a dead client variable, which did nothing."""
+@@ -312,14 +312,13 @@ class TestReasoningCommand:
+         m = re.search(r'function cmdReasoning\(.*?\n\}', src, re.DOTALL)
+         assert m
+         fn = m.group(0)
+-        for level in ('none', 'minimal', 'low', 'medium', 'high', 'xhigh'):
++        for level in (
++            'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'
++        ):
+             assert f"'{level}'" in fn, (
+                 f"cmdReasoning must accept '{level}' (CLI parity with "
+                 f"hermes_constants.parse_reasoning_effort)"
+             )
+-        assert "'max'" not in fn, (
+-            "cmdReasoning should only expose efforts up to xhigh"
+-        )
+ 
+     def test_reasoning_subargs_match_cli_levels(self):
+         """Autocomplete subArgs must expose every CLI effort level + show/hide."""
+@@ -328,14 +327,12 @@ class TestReasoningCommand:
+         assert m, "reasoning COMMANDS entry not found"
+         entry = m.group(0)
+         for suggestion in (
+-            'show', 'hide', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh'
++            'show', 'hide', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh',
++            'max', 'ultra'
+         ):
+             assert f"'{suggestion}'" in entry, (
+                 f"reasoning subArgs must include '{suggestion}' for CLI parity"
+             )
+-        assert "'max'" not in entry, (
+-            "reasoning command subArgs must not include 'max'"
+-        )
+ 
+ 
+ # ── api/config.py — reasoning helpers ────────────────────────────────────────
+@@ -365,7 +362,7 @@ class TestReasoningConfigHelpers:
+         # Snapshot-style assertion: if hermes_constants adds a level, this
+         # test will fail fast so we know to update WebUI too.
+         assert VALID_REASONING_EFFORTS == (
+-            'minimal', 'low', 'medium', 'high', 'xhigh'
++            'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'
+         )
+ 
+     def test_set_reasoning_effort_persists_to_config_yaml(self, tmp_path, monkeypatch):
