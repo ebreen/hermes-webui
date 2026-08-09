@@ -1,6 +1,16 @@
 """Tests for model-aware reasoning effort chip visibility."""
 
+import json
+
+import pytest
+
 from api import config as cfg
+
+
+@pytest.fixture(autouse=True)
+def isolate_codex_catalog(tmp_path, monkeypatch):
+    """Keep capability tests independent from the developer's live Codex cache."""
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
 
 
 def test_cursor_acp_models_do_not_support_reasoning_effort_levels():
@@ -38,6 +48,44 @@ def test_openai_codex_max_effort_is_clamped_before_streaming():
         "gpt-5.5",
         provider_id="openai-codex",
     ) == "xhigh"
+
+
+def test_openai_codex_catalog_exposes_sol_max_and_ultra(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    (tmp_path / "models_cache.json").write_text(
+        json.dumps(
+            {
+                "models": [
+                    {
+                        "slug": "gpt-5.6-sol",
+                        "supported_reasoning_levels": [
+                            {"effort": effort}
+                            for effort in (
+                                "low",
+                                "medium",
+                                "high",
+                                "xhigh",
+                                "max",
+                                "ultra",
+                            )
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(cfg.cfg, "providers", {"openai-codex": {}})
+
+    assert cfg.resolve_model_reasoning_efforts(
+        "gpt-5.6-sol", provider_id="openai-codex"
+    ) == ["low", "medium", "high", "xhigh", "max", "ultra"]
+    assert cfg.coerce_reasoning_effort_for_model(
+        "max", "gpt-5.6-sol", provider_id="openai-codex"
+    ) == "max"
+    assert cfg.coerce_reasoning_effort_for_model(
+        "ultra", "gpt-5.6-sol", provider_id="openai-codex"
+    ) == "ultra"
 
 
 def test_unsupported_xhigh_degrades_to_high_not_disabled():

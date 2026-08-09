@@ -7,6 +7,12 @@ import pytest
 from types import SimpleNamespace
 
 
+@pytest.fixture(autouse=True)
+def isolate_codex_catalog(tmp_path, monkeypatch):
+    """Keep models.dev tests independent from the developer's live Codex cache."""
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+
+
 def _install_fake_models_dev(monkeypatch, fake_fn):
     fake_agent = types.ModuleType("agent")
     fake_models_dev = types.ModuleType("agent.models_dev")
@@ -16,7 +22,7 @@ def _install_fake_models_dev(monkeypatch, fake_fn):
     monkeypatch.setitem(sys.modules, "agent.models_dev", fake_models_dev)
 
 
-def test_models_dev_true_returns_full_efforts(monkeypatch):
+def test_models_dev_true_returns_default_efforts(monkeypatch):
     _install_fake_models_dev(
         monkeypatch,
         lambda provider, model: SimpleNamespace(supports_reasoning=True),
@@ -25,7 +31,7 @@ def test_models_dev_true_returns_full_efforts(monkeypatch):
     import api.config as cfg
 
     assert cfg._models_dev_reasoning_efforts("grok-4.3", "xai-oauth") == list(
-        cfg.VALID_REASONING_EFFORTS
+        cfg._DEFAULT_REASONING_EFFORTS
     )
 
 
@@ -47,7 +53,7 @@ def test_models_dev_unknown_allows_compatibility_fallback(monkeypatch):
 
     assert cfg.resolve_model_reasoning_efforts(
         "x-ai/grok-4", provider_id="openrouter"
-    ) == list(cfg.VALID_REASONING_EFFORTS)
+    ) == list(cfg._DEFAULT_REASONING_EFFORTS)
 
 
 def test_xai_oauth_grok_uses_agent_metadata(monkeypatch):
@@ -63,7 +69,7 @@ def test_xai_oauth_grok_uses_agent_metadata(monkeypatch):
 
     assert cfg.resolve_model_reasoning_efforts(
         "@xai-oauth:grok-4.3", provider_id="xai-oauth"
-    ) == list(cfg.VALID_REASONING_EFFORTS)
+    ) == list(cfg._DEFAULT_REASONING_EFFORTS)
     assert seen == [("xai-oauth", "grok-4.3")]
 
 
@@ -150,5 +156,5 @@ display:
     status = cfg.get_reasoning_status()
 
     assert status["reasoning_effort"] == "medium"
-    assert status["supported_efforts"] == list(cfg.VALID_REASONING_EFFORTS)
+    assert status["supported_efforts"] == list(cfg._DEFAULT_REASONING_EFFORTS)
     assert status["supports_reasoning_effort"] is True

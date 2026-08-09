@@ -2975,8 +2975,19 @@ def get_effective_default_model(config_data: dict | None = None) -> str:
 # Mirrors hermes_constants.parse_reasoning_effort so WebUI can validate without
 # importing from the agent tree (which may not be installed).  Any drift here
 # will show up in the shared test suite since both sides accept the same set.
-# Keep this WebUI-visible set aligned with hermes-agent#29248.
-VALID_REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")
+# Keep this WebUI-visible set aligned with Hermes Agent. ``max`` and ``ultra``
+# are model-specific Codex levels; generic capability fallbacks stay capped at
+# ``xhigh`` and only expose the higher levels when authoritative metadata does.
+VALID_REASONING_EFFORTS = (
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "ultra",
+)
+_DEFAULT_REASONING_EFFORTS = VALID_REASONING_EFFORTS[:5]
 
 
 def parse_reasoning_effort(effort):
@@ -3200,8 +3211,47 @@ def _filter_reasoning_efforts_for_provider(
         if bare.startswith(("o1", "o3", "o4")):
             return [eff for eff in normalized if eff in {"low", "medium", "high"}]
         if bare.startswith("gpt-5"):
-            return [eff for eff in normalized if eff != "max"]
+            return [eff for eff in normalized if eff not in {"max", "ultra"}]
     return normalized
+
+
+def _codex_catalog_reasoning_efforts(model_id: str) -> list[str] | None:
+    """Return exact effort levels from Codex's authenticated model cache.
+
+    ``None`` means the cache is unavailable, malformed, or has no metadata for
+    the requested model. The caller then uses the existing safe fallbacks.
+    """
+    model = _strip_provider_hint_for_reasoning(model_id).lower()
+    if not model:
+        return None
+    codex_home = os.getenv("CODEX_HOME")
+    cache_path = (
+        Path(codex_home).expanduser() if codex_home else Path.home() / ".codex"
+    ) / "models_cache.json"
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    raw_models = payload.get("models") if isinstance(payload, dict) else None
+    if not isinstance(raw_models, list):
+        return None
+    for entry in raw_models:
+        if not isinstance(entry, dict):
+            continue
+        identity = str(entry.get("slug") or entry.get("id") or "").strip().lower()
+        if identity != model:
+            continue
+        raw_levels = entry.get("supported_reasoning_levels")
+        if not isinstance(raw_levels, list):
+            return None
+        efforts: list[str] = []
+        for raw_level in raw_levels:
+            raw_effort = raw_level.get("effort") if isinstance(raw_level, dict) else raw_level
+            effort = str(raw_effort or "").strip().lower()
+            if effort in VALID_REASONING_EFFORTS and effort not in efforts:
+                efforts.append(effort)
+        return efforts or None
+    return None
 
 
 def _heuristic_reasoning_efforts(model_id: str, provider_id: str) -> list[str]:
@@ -3215,13 +3265,13 @@ def _heuristic_reasoning_efforts(model_id: str, provider_id: str) -> list[str]:
         if bare.startswith(("o1", "o3", "o4")):
             return ["low", "medium", "high"]
         return _filter_reasoning_efforts_for_provider(
-            list(VALID_REASONING_EFFORTS), model, provider
+            list(_DEFAULT_REASONING_EFFORTS), model, provider
         )
     if provider in {"copilot", "github-copilot"}:
         if bare.startswith(("gpt-5", "o1", "o3", "o4")):
             if bare.startswith(("o1", "o3", "o4")):
                 return ["low", "medium", "high"]
-            return list(VALID_REASONING_EFFORTS)
+            return list(_DEFAULT_REASONING_EFFORTS)
     prefixes = (
         "deepseek/",
         "anthropic/",
@@ -3234,15 +3284,15 @@ def _heuristic_reasoning_efforts(model_id: str, provider_id: str) -> list[str]:
         "xiaomi/",
     )
     if any(model.startswith(prefix) for prefix in prefixes):
-        return list(VALID_REASONING_EFFORTS)
+        return list(_DEFAULT_REASONING_EFFORTS)
     if _nested_gateway_route_reasoning(model):
-        return list(VALID_REASONING_EFFORTS)
+        return list(_DEFAULT_REASONING_EFFORTS)
     # Named custom providers often rewrite model ids with dots, underscores, or
     # extra vendor namespaces. Normalize those shapes before applying family-level
     # reasoning heuristics so "deepseek.v3.2", "deepseek_v4_flash", and
     # "vendor.deepseek.v3.2" are treated consistently.
     if any(_candidate_supports_reasoning(candidate) for candidate in _reasoning_name_candidates(bare)):
-        return list(VALID_REASONING_EFFORTS)
+        return list(_DEFAULT_REASONING_EFFORTS)
     return []
 
 
@@ -3273,7 +3323,7 @@ def _models_dev_reasoning_efforts(model_id: str, provider_id: str) -> list[str] 
     supports_reasoning = getattr(capabilities, "supports_reasoning", None)
     if supports_reasoning is True:
         return _filter_reasoning_efforts_for_provider(
-            list(VALID_REASONING_EFFORTS), model, provider
+            list(_DEFAULT_REASONING_EFFORTS), model, provider
         )
     if supports_reasoning is False:
         return []
@@ -3517,6 +3567,13 @@ def resolve_model_reasoning_efforts(
     except Exception:
         pass
 
+    # The Codex model catalog is account- and model-specific. Prefer its exact
+    # levels over broad models.dev booleans and name heuristics when available.
+    if provider == "openai-codex":
+        codex_efforts = _codex_catalog_reasoning_efforts(hinted_model)
+        if codex_efforts is not None:
+            return codex_efforts
+
     if provider in {"copilot", "github-copilot"}:
         try:
             from hermes_cli.models import github_model_reasoning_efforts
@@ -3581,9 +3638,6 @@ def coerce_reasoning_effort_for_model(
         return ""
     if raw == "none":
         return "none"
-    accepts_max_as_xhigh = raw == "max"
-    if accepts_max_as_xhigh:
-        raw = "xhigh"
     if raw not in VALID_REASONING_EFFORTS:
         return ""
     supported = resolve_model_reasoning_efforts(
@@ -3598,18 +3652,18 @@ def coerce_reasoning_effort_for_model(
     # model rejects (e.g. openai-codex gpt-5 'max', o1/o3/o4 above 'high') -
     # those paths return a NON-empty clamped set, so the degrade ladder below
     # still applies. When the set is empty we can't tell "unsupported" from
-    # "unknown", so preserve the user's configured effort verbatim where it is
-    # still valid. A stale 'max' value is no longer parser-valid on the WebUI
-    # side, so degrade that unknown-model case to xhigh instead of silently
-    # dropping reasoning later in parse_reasoning_effort(). (#3505 review)
+    # "unknown", so preserve ordinary effort levels verbatim. Keep the previous
+    # safe behavior for model-specific ``max``/``ultra`` values: without positive
+    # capability metadata, degrade them to ``xhigh`` rather than sending a level
+    # the provider may reject. (#3505 review)
     if not supported:
-        return "xhigh" if accepts_max_as_xhigh else raw
+        return "xhigh" if raw in {"max", "ultra"} else raw
     if raw in supported:
-        return "xhigh" if accepts_max_as_xhigh else raw
+        return raw
     # Degrade to the closest *lower* supported level instead of silently
     # disabling reasoning. e.g. max -> xhigh -> high, or xhigh -> high when the
     # target model caps below the configured effort. Never escalate.
-    ladder = list(VALID_REASONING_EFFORTS)  # ascending: minimal..xhigh
+    ladder = list(VALID_REASONING_EFFORTS)  # ascending: minimal..ultra
     try:
         raw_idx = ladder.index(raw)
     except ValueError:
@@ -3663,9 +3717,8 @@ def get_reasoning_status(
         # Match CLI default (True if unset in config.yaml)
         "show_reasoning": bool(show_raw) if isinstance(show_raw, bool) else True,
         # Report the COERCED effort (not the raw config value) so boot/status/chip
-        # read paths agree with what streaming actually sends — e.g. a stale
-        # `reasoning_effort: max` surfaces as `xhigh`, not the now-unsupported `max`.
-        # (Codex review of the drop-max alignment.)
+        # read paths agree with what streaming actually sends. Catalog-supported
+        # ``max``/``ultra`` values stay intact; unsupported ones degrade safely.
         "reasoning_effort": coerce_reasoning_effort_for_model(
             str(effort_raw or "").strip().lower(),
             resolve_model,
@@ -3784,7 +3837,8 @@ def set_reasoning_effort(
     """Persist ``agent.reasoning_effort`` to the active profile's config.yaml.
 
     Mirrors CLI ``/reasoning <level>``: same key, same valid values
-    (``none`` | ``minimal`` | ``low`` | ``medium`` | ``high`` | ``xhigh``).
+    (``none`` | ``minimal`` | ``low`` | ``medium`` | ``high`` | ``xhigh`` |
+    ``max`` | ``ultra``).
     Raises ``ValueError`` on an unrecognised level so callers can return 400.
     """
     raw = str(effort or "").strip().lower()
