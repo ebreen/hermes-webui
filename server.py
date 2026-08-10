@@ -108,7 +108,11 @@ from api.helpers import (
     _CLIENT_DISCONNECT_ERRORS,
 )
 from api.profiles import set_request_profile, clear_request_profile
-from api.routes import handle_delete, handle_get, handle_patch, handle_post, handle_put, apply_cors_preflight_headers
+from api.routes import (
+    handle_delete, handle_get, handle_patch, handle_post, handle_put,
+    apply_cors_preflight_headers,
+)
+from api.routes import dispatch_raw_memory_route, raw_request_log_record
 from api.startup import auto_install_agent_deps, fix_credential_permissions
 from api.updates import WEBUI_VERSION
 from api.crash_visibility import install_crash_visibility
@@ -344,35 +348,16 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def log_request(self, code: str='-', size: str='-') -> None:
-        """Structured JSON logs for each request."""
-        import json as _json
-        duration_ms = round((time.time() - getattr(self, '_req_t0', time.time())) * 1000, 1)
-        remote = '-'
-        try:
-            if getattr(self, 'client_address', None):
-                remote = str(self.client_address[0])
-        except Exception:
-            remote = '-'
-        forwarded_for = None
-        try:
-            forwarded_for = (self.headers.get('X-Forwarded-For') or '').split(',')[0].strip() or None
-        except Exception:
-            forwarded_for = None
-        record_data = {
-            'ts': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-            'remote': remote,
-            'method': getattr(self, 'command', None) or '-',
-            'path': getattr(self, 'path', None) or '-',
-            'status': int(code) if str(code).isdigit() else code,
-            'ms': duration_ms,
-        }
-        if forwarded_for:
-            record_data['forwarded_for'] = forwarded_for
-        record = _json.dumps(record_data)
-        self._safe_webui_print(f'[webui] {record}')
+        """Structured JSON logs; the raw route logs a fixed label only (§5/§11)."""
+        self._safe_webui_print(f'[webui] {raw_request_log_record(self, code, size)}')
+
+    def _dispatch_raw_memory_route(self) -> bool:
+        return dispatch_raw_memory_route(self)
 
     def do_GET(self) -> None:
-        self._req_t0 = time.time(); reset_trusted_auth_request_state(self)
+        self._req_t0 = time.time()
+        if getattr(self, "_dispatch_raw_memory_route", lambda: False)(): return
+        reset_trusted_auth_request_state(self)
         cookie_profile = get_profile_cookie(self)
         if cookie_profile:
             set_request_profile(cookie_profile)
@@ -425,17 +410,24 @@ class Handler(BaseHTTPRequestHandler):
             clear_request_profile()
 
     def do_POST(self) -> None:
+        self._req_t0 = time.time()
+        if getattr(self, "_dispatch_raw_memory_route", lambda: False)(): return
         self._handle_write(handle_post)
 
     def do_PUT(self) -> None:
+        self._req_t0 = time.time()
+        if getattr(self, "_dispatch_raw_memory_route", lambda: False)(): return
         self._handle_write(handle_put)
 
     def do_PATCH(self) -> None:
+        self._req_t0 = time.time()
+        if getattr(self, "_dispatch_raw_memory_route", lambda: False)(): return
         self._handle_write(handle_patch)
 
     def do_OPTIONS(self) -> None:
         """Handle CORS preflight requests (headers emitted by api.routes)."""
         self._req_t0 = time.time()
+        if getattr(self, "_dispatch_raw_memory_route", lambda: False)(): return
         self.send_response(200)
         apply_cors_preflight_headers(self)
         # Frame the empty preflight: without Content-Length an HTTP/1.1 keep-alive
@@ -444,7 +436,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_DELETE(self) -> None:
+        self._req_t0 = time.time()
+        if getattr(self, "_dispatch_raw_memory_route", lambda: False)(): return
         self._handle_write(handle_delete)
+
+    def do_HEAD(self) -> None:
+        """HEAD: the raw route owns its exact-path contract (§4); others keep 501."""
+        self._req_t0 = time.time()
+        if getattr(self, "_dispatch_raw_memory_route", lambda: False)(): return
+        self.send_error(501, "Unsupported method (HEAD)")
 
 
 def _raise_fd_soft_limit(target: int = 4096) -> dict:

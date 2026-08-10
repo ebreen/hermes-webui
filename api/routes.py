@@ -31,7 +31,7 @@ import socket as _socket
 from collections import defaultdict, deque
 from pathlib import Path
 from contextlib import closing
-from urllib.parse import parse_qs, quote, unquote, urljoin, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse, urlsplit
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 from api.agent_runtime import (
@@ -12194,6 +12194,588 @@ def _render_index_shell_base() -> str:
     return base
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Raw memory route (hermex #58, PR 2) — contract §4 / §8 / §11 / §12
+#
+# Exact-path route-local dispatch for GET /api/memory/raw. server.py routes
+# every method on the exact path here BEFORE any generic profile setup, auth,
+# trusted-header processing, CSRF handling, or body reads. This handler is the
+# no-mutation boundary of §5: it never calls set_request_profile()/
+# clear_request_profile(), never consults process/TLS active-profile state,
+# and never touches the generic auth/session machinery. All reads go through
+# the pure api.auth / api.memory_sources seams.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_RAW_MEMORY_PATH = "/api/memory/raw"
+_RAW_200_CONTENT_TYPE = "application/json; charset=utf-8"
+_RAW_200_CACHE_CONTROL = "private, no-store"
+_RAW_ETAG_TOKEN_RE = re.compile(r'^"repr-sha256:[0-9a-f]{64}"$')
+_COOKIE_NAME_TOKEN_RE = re.compile(r"^[-!#$%&'*+.^_`|~0-9A-Za-z]+$")
+
+_RAW_METHOD_NOT_ALLOWED_BODY = b'{"error":"method_not_allowed"}'
+_RAW_ERROR_BODIES = {
+    "invalid_request": b'{"error":"invalid_request"}',
+    "authentication_required": b'{"error":"authentication_required"}',
+    "forbidden": b'{"error":"forbidden"}',
+    "not_found": b'{"error":"not_found"}',
+    "source_changed": b'{"error":"source_changed"}',
+    "source_too_large": b'{"error":"source_too_large"}',
+    "raw_read_busy": b'{"error":"raw_read_busy"}',
+    "raw_unavailable": b'{"error":"raw_unavailable"}',
+}
+_RAW_ERROR_STATUS = {
+    "invalid_request": 400,
+    "authentication_required": 401,
+    "forbidden": 403,
+    "not_found": 404,
+    "source_changed": 409,
+    "source_too_large": 413,
+    "raw_read_busy": 503,
+    "raw_unavailable": 503,
+}
+
+# Module-level bindings so route-level tests can monkeypatch the source reader
+# and so the handler resolves it at call time. api.memory_sources imports only
+# api.auth/api.config/api.workspace — no import cycle with routes.
+from api.memory_sources import (
+    parse_raw_query,
+    raw_max_bytes,
+    read_memory_source,
+    validate_provenance,
+)
+
+
+def _raw_write_response(handler, status, body, extra_headers=None, *, close=False):
+    """Dedicated raw-route writer (§11).
+
+    Owns ``send_response()``/``end_headers()``/``wfile.write()`` and never
+    reuses ``api.helpers.j()`` (which may gzip, flush queued auth cookies, or
+    log ``handler.path``). ``log_request()`` emits the fixed route label. A
+    client disconnect after the response is buffered is the expected path and
+    is never converted into a server 500.
+    """
+    if close:
+        handler.close_connection = True
+    try:
+        handler.send_response(status)
+        for name, value in (extra_headers or {}).items():
+            handler.send_header(name, value)
+        if close:
+            handler.send_header("Connection", "close")
+        handler.end_headers()
+        if body:
+            handler.wfile.write(body)
+    except _CLIENT_DISCONNECT_ERRORS:
+        return
+    except Exception:
+        try:
+            handler._safe_webui_print(
+                "[webui] ERROR /api/memory/raw (response write failed)"
+            )
+        except Exception:
+            pass
+
+
+def _raw_unread_body_framing(handler) -> bool:
+    """§4/§11 header-only framing check.
+
+    A positive ``Content-Length``, any ``Transfer-Encoding`` field, or
+    ambiguous/duplicate length framing means an unread body may remain: the
+    connection must be closed without consuming it. A single
+    ``Content-Length: 0`` with no transfer-encoding is not unread framing.
+    Inspects raw framing headers only — never cookies, query, auth,
+    provenance, source, or body bytes.
+    """
+    headers = getattr(handler, "headers", None)
+    if headers is None:
+        return False
+    try:
+        if headers.get_all("Transfer-Encoding"):
+            return True
+        lengths = headers.get_all("Content-Length") or []
+    except Exception:
+        return False
+    if len(lengths) != 1:
+        return bool(lengths)  # duplicates/ambiguity → close; absent → no body
+    value = (lengths[0] or "").strip()
+    if not value.isdigit():
+        return True
+    return int(value) > 0
+
+
+def _raw_auth_cookie_name() -> str:
+    """§8 step 2 — auth cookie name: ``HERMES_WEBUI_COOKIE_NAME`` or default."""
+    name = os.getenv("HERMES_WEBUI_COOKIE_NAME", "").strip()
+    if name and _COOKIE_NAME_TOKEN_RE.match(name):
+        return name
+    return "hermes_session"
+
+
+def _raw_profile_cookie_name() -> str:
+    """§8 step 2 — profile cookie name with ``get_profile_cookie_name()``
+    precedence, resolved route-locally without calling the helper (which may
+    warn and mutate process state)."""
+    from api.helpers import PROFILE_COOKIE_NAME
+
+    name = os.getenv("HERMES_WEBUI_PROFILE_COOKIE_NAME", "").strip()
+    if name:
+        return name
+    legacy = os.getenv("WEBUI_PROFILE_COOKIE_NAME", "").strip()
+    if legacy:
+        return legacy
+    return PROFILE_COOKIE_NAME
+
+
+def _raw_valid_cookie_value(value: str) -> bool:
+    """RFC 6265 cookie-octet check for a single cookie value."""
+    if not value:
+        return False
+    for ch in value:
+        code = ord(ch)
+        if code < 0x21 or code > 0x7E:
+            return False
+        if ch in '"(),;\\':
+            return False
+    return True
+
+
+def _raw_cookie_failure_is_profile(pieces, profile_cookie_name: str) -> bool:
+    """True when any Cookie piece names the configured profile cookie."""
+    for piece in pieces:
+        name = piece.strip().split("=", 1)[0].strip()
+        if name == profile_cookie_name:
+            return True
+    return False
+
+
+def _raw_parse_cookies(handler, profile_cookie_name: str):
+    """Strict route-local Cookie parse (§8 step 2).
+
+    Combines ALL ``Cookie`` field instances in received order into one logical
+    header and parses it strictly (never a first/last ``get()`` or
+    ``SimpleCookie`` collapse). Returns ``(cookies, None)`` on success or
+    ``(None, error_key)`` — ``"forbidden"`` when the profile cookie is
+    involved in the failure, ``"authentication_required"`` otherwise.
+    """
+    headers = getattr(handler, "headers", None)
+    if headers is None:
+        return {}, None
+    fields = [v for name, v in headers.items() if (name or "").lower() == "cookie"]
+    if not fields:
+        return {}, None
+    combined = "; ".join(fields)
+    pieces = combined.split(";")
+    parsed = {}
+    for piece in pieces:
+        piece = piece.strip()
+        if not piece or "=" not in piece:
+            error = (
+                "forbidden"
+                if _raw_cookie_failure_is_profile(pieces, profile_cookie_name)
+                else "authentication_required"
+            )
+            return None, error
+        name, value = piece.split("=", 1)
+        name = name.strip()
+        value = value.strip()
+        if not _COOKIE_NAME_TOKEN_RE.match(name) or not _raw_valid_cookie_value(value):
+            error = (
+                "forbidden"
+                if _raw_cookie_failure_is_profile(pieces, profile_cookie_name)
+                else "authentication_required"
+            )
+            return None, error
+        if name in parsed:
+            error = (
+                "forbidden"
+                if _raw_cookie_failure_is_profile(pieces, profile_cookie_name)
+                else "authentication_required"
+            )
+            return None, error
+        parsed[name] = value
+    return parsed, None
+
+
+def _raw_root_alias(name: str) -> str:
+    """Root/default alias normalization (§6) without discovery caches."""
+    if not name or name == "default":
+        return "default"
+    return name
+
+
+def _raw_profile_home(bound_profile: str) -> Path:
+    """Profile home for the bound profile (§6/§9) — never process-global state."""
+    from api import profiles as _profiles
+
+    base = Path(_profiles._DEFAULT_HERMES_HOME)
+    if bound_profile == "default":
+        return base
+    return base / "profiles" / bound_profile
+
+
+def _raw_isolated_pin() -> str | None:
+    """§6 isolated deployment pin; ``None`` when isolated mode is not active."""
+    try:
+        from api import profiles as _profiles
+
+        if not _profiles._is_isolated_profile_mode():
+            return None
+        home = _profiles._INITIAL_HERMES_HOME
+        if not home:
+            return None
+        return Path(home).name or None
+    except Exception:
+        return None
+
+
+def _raw_authenticate(handler):
+    """§8 steps 1-4 gate. Returns ``(error_key, ctx)``; error_key is None on
+    success. Never calls generic auth, never mints/touches/revokes a session,
+    never queues a cookie, and never touches the request-profile TLS slot."""
+    from api.auth import (
+        AUTH_DISABLED,
+        AUTH_STATE_UNAVAILABLE,
+        AuthorizedRawProfileContext,
+        read_only_auth_enabled,
+        read_only_incoming_cookie_session_info,
+        read_only_verify_profile_cookie,
+    )
+
+    # Step 1: tri-state deployment-wide auth posture.
+    posture = read_only_auth_enabled()
+    if posture == AUTH_DISABLED:
+        return "forbidden", None
+    if posture == AUTH_STATE_UNAVAILABLE:
+        return "raw_unavailable", None
+
+    # Step 2: strict cookie cardinality over all combined Cookie fields.
+    auth_cookie_name = _raw_auth_cookie_name()
+    profile_cookie_name = _raw_profile_cookie_name()
+    cookies, error = _raw_parse_cookies(handler, profile_cookie_name)
+    if error is not None:
+        return error, None
+    auth_value = cookies.get(auth_cookie_name)
+    if not auth_value:
+        return "authentication_required", None
+
+    # Step 4a: validate the exact incoming auth cookie via the pure seam.
+    info = read_only_incoming_cookie_session_info(auth_value)
+    if info is None:
+        return "authentication_required", None
+    auth_session_id = info.get("token")
+    if not auth_session_id:
+        return "authentication_required", None
+
+    # Step 4b: derive the bound profile from the validated session record.
+    bound = info.get("bound_profile")
+    bound = bound.strip() if isinstance(bound, str) else ""
+    if not bound:
+        bound = "default"
+
+    # Step 4c: a present profile cookie must confirm the bound profile.
+    profile_value = cookies.get(profile_cookie_name)
+    if profile_value is not None:
+        confirmed = read_only_verify_profile_cookie(profile_value, auth_value)
+        if confirmed is None or _raw_root_alias(confirmed) != _raw_root_alias(bound):
+            return "forbidden", None
+
+    # Step 4d: isolated deployment pin must agree with the bound profile.
+    pin = _raw_isolated_pin()
+    if pin is not None and _raw_root_alias(pin) != _raw_root_alias(bound):
+        return "forbidden", None
+
+    ctx = AuthorizedRawProfileContext(
+        bound_profile=bound,
+        profile_home=_raw_profile_home(bound),
+        auth_session_id=auth_session_id,
+        session_record_view=info,
+    )
+    return None, ctx
+
+
+def _raw_if_none_match_matches(handler, etag: str) -> bool:
+    """§11 conditional GET: combine all ``If-None-Match`` field instances,
+    comma-parse with OWS-trimmed members; accept ``*`` and strong/weak
+    members of the exact ``"repr-sha256:<64 lowercase hex>"`` form; malformed
+    members are ignored. Inspected only after the full gate and a stable
+    representation exist."""
+    headers = getattr(handler, "headers", None)
+    if headers is None:
+        return False
+    try:
+        values = headers.get_all("If-None-Match") or []
+    except Exception:
+        return False
+    if not values:
+        return False
+    combined = ",".join(values)
+    for raw_member in combined.split(","):
+        member = raw_member.strip()
+        if not member:
+            continue
+        if member == "*":
+            return True
+        if member[:2].lower() == "w/":
+            member = member[2:].strip()
+        if _RAW_ETAG_TOKEN_RE.match(member) and member == etag:
+            return True
+    return False
+
+
+def raw_capability() -> dict:
+    """§12 additive ``capabilities.memory_raw_v1`` advertisement.
+
+    ``available`` is true only when the pure auth posture is ``auth_enabled``,
+    the authoritative ``STATE_DIR/.signing_key`` is present/readable/valid,
+    the configured limit is valid, and the platform can provide every promised
+    anchored/no-follow/descriptor-and-namespace mutation guarantee. Evaluation
+    itself never creates keys, refreshes caches, or mutates any state.
+    """
+    try:
+        from api.auth import (
+            AUTH_ENABLED,
+            _read_only_signing_key,
+            read_only_auth_enabled,
+        )
+        from api.memory_sources import _RACE_SAFE_READ_SUPPORTED, raw_max_bytes
+    except Exception:
+        return {"available": False}
+    if read_only_auth_enabled() != AUTH_ENABLED:
+        return {"available": False}
+    if _read_only_signing_key() is None:
+        return {"available": False}
+    if raw_max_bytes() is None:
+        return {"available": False}
+    if not _RACE_SAFE_READ_SUPPORTED:
+        return {"available": False}
+    return {
+        "available": True,
+        "endpoint": "/api/memory/raw",
+        "schema_version": 1,
+        "sources": ["memory", "user", "soul", "project_context"],
+        "representation_etag": {
+            "algorithm": "sha-256",
+            "scope": "canonical_uncompressed_200_json_utf8",
+            "format": "quoted_repr_sha256",
+            "pattern": '"repr-sha256:<64 lowercase hex>"',
+        },
+        "conditional_requests": {
+            "request_header": "If-None-Match",
+            "accepted_forms": ["strong", "weak", "*"],
+            "weak_comparison": True,
+            "malformed_members": "ignored",
+            "304_body": "absent",
+        },
+    }
+
+
+# Exact raw memory route path (hermex #58 §4): only this exact parsed path is
+# the route; the server dispatches it before any generic auth/profile/body work.
+_RAW_MEMORY_PATH = "/api/memory/raw"
+
+
+def is_raw_memory_path(path: str) -> bool:
+    """Exact-path match for the raw memory route (hermex #58 §4).
+
+    Only ``parsed.path == "/api/memory/raw"`` is this route — never
+    ``/api/memory/raw/``, ``/api/memory/raw;x`` (urlparse strips the
+    ``;params`` suffix, so an exact match must also require an empty
+    ``params``), ``/api/memory/rawish``, or encoded aliases.
+    """
+    try:
+        parsed = urlparse(path)
+        return parsed.path == _RAW_MEMORY_PATH and parsed.params == ""
+    except Exception:
+        return False
+
+
+def dispatch_raw_memory_route(handler) -> bool:
+    """Early exact-path dispatch for ``/api/memory/raw`` (§4).
+
+    Runs BEFORE any profile-cookie extraction, request-profile setup,
+    generic authentication, trusted-header processing, session
+    visibility checks, CSRF handling, request-body reads, global OPTIONS
+    handling, or generic 404 handling. Returns True when the raw route
+    handled the request; the caller returns directly. Duck-typed fakes
+    without ``path``/the dispatch method are safe: no dispatch happens.
+    """
+    if not is_raw_memory_path(getattr(handler, "path", None) or "-"):
+        return False
+    handle_raw_memory_route(handler, urlparse(handler.path))
+    return True
+
+
+def raw_request_log_record(handler, code="-", size="-") -> str:
+    """Structured request-log JSON line (§5/§11).
+
+    The raw memory route (exact ``/api/memory/raw`` path) logs a FIXED
+    route label only — never ``handler.path`` (which carries the query
+    string), cookies, forwarded identity, or the remote address. All
+    other requests keep the previous record shape.
+    """
+    duration_ms = round((time.time() - getattr(handler, "_req_t0", time.time())) * 1000, 1)
+    record_data = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "method": getattr(handler, "command", None) or "-",
+        "status": int(code) if str(code).isdigit() else code,
+        "ms": duration_ms,
+    }
+    if is_raw_memory_path(getattr(handler, "path", None) or "-"):
+        record_data["path"] = _RAW_MEMORY_PATH
+    else:
+        remote = "-"
+        try:
+            if getattr(handler, "client_address", None):
+                remote = str(handler.client_address[0])
+        except Exception:
+            remote = "-"
+        forwarded_for = None
+        try:
+            forwarded_for = (handler.headers.get("X-Forwarded-For") or "").split(",")[0].strip() or None
+        except Exception:
+            forwarded_for = None
+        record_data["remote"] = remote
+        record_data["path"] = getattr(handler, "path", None) or "-"
+        if forwarded_for:
+            record_data["forwarded_for"] = forwarded_for
+    return json.dumps(record_data)
+
+
+def handle_raw_memory_route(handler, parsed) -> None:
+    """PR 2 exact-path route-local dispatch (§4/§8/§11).
+
+    Called by ``server.Handler`` for the exact ``/api/memory/raw`` path on
+    every method BEFORE generic profile setup/auth/body reads. Returns
+    directly; never falls through to ``handle_get``/``_handle_write``/
+    ``check_auth()``/``_guard_request_session_visibility``.
+    """
+    method = (getattr(handler, "command", None) or "").upper()
+    close = _raw_unread_body_framing(handler)
+
+    # §4 method contract: only GET is allowed on this route. HEAD is bodyless
+    # and omits Content-Length/Content-Type; every other method gets the
+    # compact 405 + Allow: GET. No auth/session/cookie/CSRF/source/body work
+    # happens for any non-GET method.
+    if method != "GET":
+        if method == "HEAD":
+            _raw_write_response(handler, 405, None, {"Allow": "GET"}, close=True)
+        else:
+            _raw_write_response(
+                handler,
+                405,
+                _RAW_METHOD_NOT_ALLOWED_BODY,
+                {
+                    "Allow": "GET",
+                    "Content-Length": str(len(_RAW_METHOD_NOT_ALLOWED_BODY)),
+                },
+                close=close,
+            )
+        return
+
+    # §8 steps 1-4: tri-state auth posture, cookie cardinality, pure session
+    # seam, bound profile + profile-cookie confirm + isolated pin.
+    error, ctx = _raw_authenticate(handler)
+    if error is not None:
+        body = _RAW_ERROR_BODIES.get(error, _RAW_ERROR_BODIES["raw_unavailable"])
+        status = _RAW_ERROR_STATUS.get(error, 503)
+        headers = {"Content-Length": str(len(body))}
+        if error == "raw_read_busy":
+            headers["Retry-After"] = "1"
+        _raw_write_response(handler, status, body, headers, close=close)
+        return
+
+    # §8 steps 5-8: browser provenance over the received header list.
+    import ssl as _ssl
+
+    tls = isinstance(getattr(handler, "connection", None), _ssl.SSLSocket)
+    trust_proto = os.getenv("HERMES_WEBUI_TRUST_FORWARDED_PROTO", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    trust_host = os.getenv("HERMES_WEBUI_TRUST_FORWARDED_HOST", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    headers_obj = getattr(handler, "headers", None)
+    fields = list(headers_obj.items()) if headers_obj is not None else []
+    provenance = validate_provenance(
+        fields,
+        tls=tls,
+        trust_forwarded_proto=trust_proto,
+        trust_forwarded_host=trust_host,
+    )
+    if not provenance.ok:
+        body = _RAW_ERROR_BODIES["forbidden"]
+        _raw_write_response(
+            handler, 403, body, {"Content-Length": str(len(body))}, close=close
+        )
+        return
+
+    # §4: query parsing happens only after the GET authentication gate.
+    query = parse_raw_query(parsed.query or "")
+    if not query.ok:
+        body = _RAW_ERROR_BODIES["invalid_request"]
+        _raw_write_response(
+            handler, 400, body, {"Content-Length": str(len(body))}, close=close
+        )
+        return
+
+    # §9/§10: bounded read of the fixed source under the authorized context.
+    outcome = read_memory_source(
+        ctx, query.source, session_id=query.session_id, limit=raw_max_bytes()
+    )
+    if outcome.status != 200:
+        error = outcome.error or "raw_unavailable"
+        body = _RAW_ERROR_BODIES.get(error, _RAW_ERROR_BODIES["raw_unavailable"])
+        status = _RAW_ERROR_STATUS.get(error, outcome.status)
+        if status not in (400, 401, 403, 404, 405, 409, 413, 503):
+            status, body = 503, _RAW_ERROR_BODIES["raw_unavailable"]
+        headers = {"Content-Length": str(len(body))}
+        if outcome.retry_after:
+            headers["Retry-After"] = outcome.retry_after
+        _raw_write_response(handler, status, body, headers, close=close)
+        return
+
+    if outcome.body is None or outcome.etag is None:
+        body = _RAW_ERROR_BODIES["raw_unavailable"]
+        _raw_write_response(
+            handler, 503, body, {"Content-Length": str(len(body))}, close=close
+        )
+        return
+
+    # §9: If-None-Match is inspected only after the complete gate and a stable
+    # representation exists.
+    if _raw_if_none_match_matches(handler, outcome.etag):
+        _raw_write_response(
+            handler,
+            304,
+            None,
+            {"ETag": outcome.etag, "Cache-Control": _RAW_200_CACHE_CONTROL},
+            close=close,
+        )
+        return
+
+    # §11 canonical 200: exact envelope bytes, exact Content-Length,
+    # application/json, quoted repr-sha256 ETag, private/no-store,
+    # compression disabled, no Vary.
+    _raw_write_response(
+        handler,
+        200,
+        outcome.body,
+        {
+            "Content-Type": _RAW_200_CONTENT_TYPE,
+            "Content-Length": str(len(outcome.body)),
+            "Cache-Control": _RAW_200_CACHE_CONTROL,
+            "ETag": outcome.etag,
+        },
+        close=close,
+    )
+
+
 def handle_get(handler, parsed) -> bool:
     """Handle all GET routes. Returns True if handled, False for 404."""
     proxy_result = _handle_extension_sidecar_proxy(handler, parsed, "GET")
@@ -12559,7 +13141,11 @@ def handle_get(handler, parsed) -> bool:
         return True
 
     if parsed.path == "/api/system/health":
-        j(handler, build_system_health_payload())
+        payload = build_system_health_payload()
+        # hermex #58 §12: additive capability advertisement; existing health
+        # fields stay unchanged. Never includes source bytes or paths.
+        payload["capabilities"] = {"memory_raw_v1": raw_capability()}
+        j(handler, payload)
         return True
 
     if parsed.path == "/api/models":
