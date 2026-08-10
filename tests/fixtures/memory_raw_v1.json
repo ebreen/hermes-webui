@@ -1,0 +1,623 @@
+{
+  "canonical_case_mapping": {
+    "content_type": "text/markdown",
+    "name": "MEMORY.md",
+    "source": "memory"
+  },
+  "cases": [
+    {
+      "canonical_200": {
+        "absent_headers": [
+          "Content-Encoding",
+          "Vary"
+        ],
+        "body_base64_chunks": [
+          "eyJieXRlX2VuY29kaW5nIjoiYmFzZTY0IiwiYnl0ZV9sZW5ndGgiOjAsImNoZWNrc3VtIjp7ImFs",
+          "Z29yaXRobSI6InNoYS0yNTYiLCJ2YWx1ZSI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZi",
+          "OTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUifSwiY29udGVudF90eXBlIjoidGV4",
+          "dC9tYXJrZG93biIsImRhdGEiOiIiLCJuYW1lIjoiTUVNT1JZLm1kIiwic2NoZW1hX3ZlcnNpb24i",
+          "OjEsInNvdXJjZSI6Im1lbW9yeSIsInNvdXJjZV92ZXJzaW9uIjoic2hhMjU2OmUzYjBjNDQyOThm",
+          "YzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUifQ=="
+        ],
+        "body_byte_length": 340,
+        "etag": "\"repr-sha256:8829176d33e19efc10eeea806dd5db96585b82b2d6e122d1d949948e2059b31d\"",
+        "headers": {
+          "Cache-Control": "private, no-store",
+          "Content-Length": "340",
+          "Content-Type": "application/json; charset=utf-8",
+          "Date": "Wed, 01 Jan 2025 00:00:00 GMT",
+          "ETag": "\"repr-sha256:8829176d33e19efc10eeea806dd5db96585b82b2d6e122d1d949948e2059b31d\""
+        },
+        "name": "MEMORY.md",
+        "representation_sha256": "8829176d33e19efc10eeea806dd5db96585b82b2d6e122d1d949948e2059b31d",
+        "source": "memory"
+      },
+      "id": "empty",
+      "source_base64": "",
+      "source_byte_length": 0,
+      "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_version": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "canonical_200": {
+        "absent_headers": [
+          "Content-Encoding",
+          "Vary"
+        ],
+        "body_base64_chunks": [
+          "eyJieXRlX2VuY29kaW5nIjoiYmFzZTY0IiwiYnl0ZV9sZW5ndGgiOjEyLCJjaGVja3N1bSI6eyJh",
+          "bGdvcml0aG0iOiJzaGEtMjU2IiwidmFsdWUiOiJiYjg5YTZlODEyOGQwNDlmNDIyNTkzMmY5ZGU0",
+          "NjNmZWYyZTk5MmM4YTQzOWIyMGViYjE3YjM3OTJkZGFjM2QyIn0sImNvbnRlbnRfdHlwZSI6InRl",
+          "eHQvbWFya2Rvd24iLCJkYXRhIjoiSXlCT2IzUmxDbXhwYm1VSyIsIm5hbWUiOiJNRU1PUlkubWQi",
+          "LCJzY2hlbWFfdmVyc2lvbiI6MSwic291cmNlIjoibWVtb3J5Iiwic291cmNlX3ZlcnNpb24iOiJz",
+          "aGEyNTY6YmI4OWE2ZTgxMjhkMDQ5ZjQyMjU5MzJmOWRlNDYzZmVmMmU5OTJjOGE0MzliMjBlYmIx",
+          "N2IzNzkyZGRhYzNkMiJ9"
+        ],
+        "body_byte_length": 357,
+        "etag": "\"repr-sha256:8f85cc4d4f79e33cf20327f216df9ddaba87799b17c033ade0620848d24036db\"",
+        "headers": {
+          "Cache-Control": "private, no-store",
+          "Content-Length": "357",
+          "Content-Type": "application/json; charset=utf-8",
+          "Date": "Wed, 01 Jan 2025 00:00:00 GMT",
+          "ETag": "\"repr-sha256:8f85cc4d4f79e33cf20327f216df9ddaba87799b17c033ade0620848d24036db\""
+        },
+        "name": "MEMORY.md",
+        "representation_sha256": "8f85cc4d4f79e33cf20327f216df9ddaba87799b17c033ade0620848d24036db",
+        "source": "memory"
+      },
+      "id": "lf",
+      "source_base64": "IyBOb3RlCmxpbmUK",
+      "source_byte_length": 12,
+      "source_sha256": "bb89a6e8128d049f4225932f9de463fef2e992c8a439b20ebb17b3792ddac3d2",
+      "source_version": "sha256:bb89a6e8128d049f4225932f9de463fef2e992c8a439b20ebb17b3792ddac3d2"
+    },
+    {
+      "canonical_200": {
+        "absent_headers": [
+          "Content-Encoding",
+          "Vary"
+        ],
+        "body_base64_chunks": [
+          "eyJieXRlX2VuY29kaW5nIjoiYmFzZTY0IiwiYnl0ZV9sZW5ndGgiOjE0LCJjaGVja3N1bSI6eyJh",
+          "bGdvcml0aG0iOiJzaGEtMjU2IiwidmFsdWUiOiJkOWMwMmQyYmZkY2U2OGNkYmQxYjE2YjBlZmU3",
+          "ZGY3YTdiNDhmODU3MzhlNTlmNTZjZGE0ODc2YzBiOWE4MTA3In0sImNvbnRlbnRfdHlwZSI6InRl",
+          "eHQvbWFya2Rvd24iLCJkYXRhIjoiSXlCT2IzUmxEUXBzYVc1bERRbz0iLCJuYW1lIjoiTUVNT1JZ",
+          "Lm1kIiwic2NoZW1hX3ZlcnNpb24iOjEsInNvdXJjZSI6Im1lbW9yeSIsInNvdXJjZV92ZXJzaW9u",
+          "Ijoic2hhMjU2OmQ5YzAyZDJiZmRjZTY4Y2RiZDFiMTZiMGVmZTdkZjdhN2I0OGY4NTczOGU1OWY1",
+          "NmNkYTQ4NzZjMGI5YTgxMDcifQ=="
+        ],
+        "body_byte_length": 361,
+        "etag": "\"repr-sha256:4663201cd67c35e6118af34da733f0275aadb81e6b043d24c705061d0a678038\"",
+        "headers": {
+          "Cache-Control": "private, no-store",
+          "Content-Length": "361",
+          "Content-Type": "application/json; charset=utf-8",
+          "Date": "Wed, 01 Jan 2025 00:00:00 GMT",
+          "ETag": "\"repr-sha256:4663201cd67c35e6118af34da733f0275aadb81e6b043d24c705061d0a678038\""
+        },
+        "name": "MEMORY.md",
+        "representation_sha256": "4663201cd67c35e6118af34da733f0275aadb81e6b043d24c705061d0a678038",
+        "source": "memory"
+      },
+      "id": "crlf",
+      "source_base64": "IyBOb3RlDQpsaW5lDQo=",
+      "source_byte_length": 14,
+      "source_sha256": "d9c02d2bfdce68cdbd1b16b0efe7df7a7b48f85738e59f56cda4876c0b9a8107",
+      "source_version": "sha256:d9c02d2bfdce68cdbd1b16b0efe7df7a7b48f85738e59f56cda4876c0b9a8107"
+    },
+    {
+      "canonical_200": {
+        "absent_headers": [
+          "Content-Encoding",
+          "Vary"
+        ],
+        "body_base64_chunks": [
+          "eyJieXRlX2VuY29kaW5nIjoiYmFzZTY0IiwiYnl0ZV9sZW5ndGgiOjEyLCJjaGVja3N1bSI6eyJh",
+          "bGdvcml0aG0iOiJzaGEtMjU2IiwidmFsdWUiOiI5NjZjNjQ4NDEwODJkOWY5YTI5ZTdlMjBhYTE3",
+          "Yzc3MmI3MGZiODg5MGM4MDJkZDVmZDI0NzIxMDM5MTRlZTExIn0sImNvbnRlbnRfdHlwZSI6InRl",
+          "eHQvbWFya2Rvd24iLCJkYXRhIjoiSXlCT2IzUmxEV3hwYm1VTiIsIm5hbWUiOiJNRU1PUlkubWQi",
+          "LCJzY2hlbWFfdmVyc2lvbiI6MSwic291cmNlIjoibWVtb3J5Iiwic291cmNlX3ZlcnNpb24iOiJz",
+          "aGEyNTY6OTY2YzY0ODQxMDgyZDlmOWEyOWU3ZTIwYWExN2M3NzJiNzBmYjg4OTBjODAyZGQ1ZmQy",
+          "NDcyMTAzOTE0ZWUxMSJ9"
+        ],
+        "body_byte_length": 357,
+        "etag": "\"repr-sha256:1068b80a49dc96f2d9c93bba23a70bad38951866444a292538a71c94216efcc2\"",
+        "headers": {
+          "Cache-Control": "private, no-store",
+          "Content-Length": "357",
+          "Content-Type": "application/json; charset=utf-8",
+          "Date": "Wed, 01 Jan 2025 00:00:00 GMT",
+          "ETag": "\"repr-sha256:1068b80a49dc96f2d9c93bba23a70bad38951866444a292538a71c94216efcc2\""
+        },
+        "name": "MEMORY.md",
+        "representation_sha256": "1068b80a49dc96f2d9c93bba23a70bad38951866444a292538a71c94216efcc2",
+        "source": "memory"
+      },
+      "id": "lone_cr",
+      "source_base64": "IyBOb3RlDWxpbmUN",
+      "source_byte_length": 12,
+      "source_sha256": "966c64841082d9f9a29e7e20aa17c772b70fb8890c802dd5fd2472103914ee11",
+      "source_version": "sha256:966c64841082d9f9a29e7e20aa17c772b70fb8890c802dd5fd2472103914ee11"
+    },
+    {
+      "canonical_200": {
+        "absent_headers": [
+          "Content-Encoding",
+          "Vary"
+        ],
+        "body_base64_chunks": [
+          "eyJieXRlX2VuY29kaW5nIjoiYmFzZTY0IiwiYnl0ZV9sZW5ndGgiOjksImNoZWNrc3VtIjp7ImFs",
+          "Z29yaXRobSI6InNoYS0yNTYiLCJ2YWx1ZSI6IjIzMTg3ZjcwNjY0MDRhMTU0NmM2OTdjNDM0ZWE2",
+          "MmEzNWRjODZlZDA3YjY4MjllMTM0ZmUxOTM2NWJjYzNmZGUifSwiY29udGVudF90eXBlIjoidGV4",
+          "dC9tYXJrZG93biIsImRhdGEiOiI3N3UvSXlCQ1QwMEsiLCJuYW1lIjoiTUVNT1JZLm1kIiwic2No",
+          "ZW1hX3ZlcnNpb24iOjEsInNvdXJjZSI6Im1lbW9yeSIsInNvdXJjZV92ZXJzaW9uIjoic2hhMjU2",
+          "OjIzMTg3ZjcwNjY0MDRhMTU0NmM2OTdjNDM0ZWE2MmEzNWRjODZlZDA3YjY4MjllMTM0ZmUxOTM2",
+          "NWJjYzNmZGUifQ=="
+        ],
+        "body_byte_length": 352,
+        "etag": "\"repr-sha256:1755e3b0f02ec588da364ad35e2d901f36d2047108833f515b2e8fa79f73a149\"",
+        "headers": {
+          "Cache-Control": "private, no-store",
+          "Content-Length": "352",
+          "Content-Type": "application/json; charset=utf-8",
+          "Date": "Wed, 01 Jan 2025 00:00:00 GMT",
+          "ETag": "\"repr-sha256:1755e3b0f02ec588da364ad35e2d901f36d2047108833f515b2e8fa79f73a149\""
+        },
+        "name": "MEMORY.md",
+        "representation_sha256": "1755e3b0f02ec588da364ad35e2d901f36d2047108833f515b2e8fa79f73a149",
+        "source": "memory"
+      },
+      "id": "bom",
+      "source_base64": "77u/IyBCT00K",
+      "source_byte_length": 9,
+      "source_sha256": "23187f7066404a1546c697c434ea62a35dc86ed07b6829e134fe19365bcc3fde",
+      "source_version": "sha256:23187f7066404a1546c697c434ea62a35dc86ed07b6829e134fe19365bcc3fde"
+    },
+    {
+      "canonical_200": {
+        "absent_headers": [
+          "Content-Encoding",
+          "Vary"
+        ],
+        "body_base64_chunks": [
+          "eyJieXRlX2VuY29kaW5nIjoiYmFzZTY0IiwiYnl0ZV9sZW5ndGgiOjksImNoZWNrc3VtIjp7ImFs",
+          "Z29yaXRobSI6InNoYS0yNTYiLCJ2YWx1ZSI6IjFjY2Y4NTg2ODMwODA0NmMwMGUxMzBlNTMyNDc0",
+          "NzU0NjE5MTgxMWQwMjIxODhkMmJjYmQzZjQyNzBlZTllZWQifSwiY29udGVudF90eXBlIjoidGV4",
+          "dC9tYXJrZG93biIsImRhdGEiOiJjSEpsQUhCdmMzUUsiLCJuYW1lIjoiTUVNT1JZLm1kIiwic2No",
+          "ZW1hX3ZlcnNpb24iOjEsInNvdXJjZSI6Im1lbW9yeSIsInNvdXJjZV92ZXJzaW9uIjoic2hhMjU2",
+          "OjFjY2Y4NTg2ODMwODA0NmMwMGUxMzBlNTMyNDc0NzU0NjE5MTgxMWQwMjIxODhkMmJjYmQzZjQy",
+          "NzBlZTllZWQifQ=="
+        ],
+        "body_byte_length": 352,
+        "etag": "\"repr-sha256:949af6110e095baa340b7c9d14a1c04eb7b57efe2fa9f482e8bfe1e7faf7423a\"",
+        "headers": {
+          "Cache-Control": "private, no-store",
+          "Content-Length": "352",
+          "Content-Type": "application/json; charset=utf-8",
+          "Date": "Wed, 01 Jan 2025 00:00:00 GMT",
+          "ETag": "\"repr-sha256:949af6110e095baa340b7c9d14a1c04eb7b57efe2fa9f482e8bfe1e7faf7423a\""
+        },
+        "name": "MEMORY.md",
+        "representation_sha256": "949af6110e095baa340b7c9d14a1c04eb7b57efe2fa9f482e8bfe1e7faf7423a",
+        "source": "memory"
+      },
+      "id": "nul",
+      "source_base64": "cHJlAHBvc3QK",
+      "source_byte_length": 9,
+      "source_sha256": "1ccf85868308046c00e130e5324747546191811d022188d2bcbd3f4270ee9eed",
+      "source_version": "sha256:1ccf85868308046c00e130e5324747546191811d022188d2bcbd3f4270ee9eed"
+    },
+    {
+      "canonical_200": {
+        "absent_headers": [
+          "Content-Encoding",
+          "Vary"
+        ],
+        "body_base64_chunks": [
+          "eyJieXRlX2VuY29kaW5nIjoiYmFzZTY0IiwiYnl0ZV9sZW5ndGgiOjE4LCJjaGVja3N1bSI6eyJh",
+          "bGdvcml0aG0iOiJzaGEtMjU2IiwidmFsdWUiOiIxNjA0NmMwYmQwZjMwNjQ1YTdiNDFiODRjNWI2",
+          "OGQ3NWZlY2Y1MmE1MTQ4NjA1NjgzYTI0OGFjNmFkMjY3YzFmIn0sImNvbnRlbnRfdHlwZSI6InRl",
+          "eHQvbWFya2Rvd24iLCJkYXRhIjoiSXlCdWJ5Qm1hVzVoYkNCdVpYZHNhVzVsIiwibmFtZSI6Ik1F",
+          "TU9SWS5tZCIsInNjaGVtYV92ZXJzaW9uIjoxLCJzb3VyY2UiOiJtZW1vcnkiLCJzb3VyY2VfdmVy",
+          "c2lvbiI6InNoYTI1NjoxNjA0NmMwYmQwZjMwNjQ1YTdiNDFiODRjNWI2OGQ3NWZlY2Y1MmE1MTQ4",
+          "NjA1NjgzYTI0OGFjNmFkMjY3YzFmIn0="
+        ],
+        "body_byte_length": 365,
+        "etag": "\"repr-sha256:a38d5f2b2204f703b84f035c906eddc4fb840234954705f56e65d52ae7aa5260\"",
+        "headers": {
+          "Cache-Control": "private, no-store",
+          "Content-Length": "365",
+          "Content-Type": "application/json; charset=utf-8",
+          "Date": "Wed, 01 Jan 2025 00:00:00 GMT",
+          "ETag": "\"repr-sha256:a38d5f2b2204f703b84f035c906eddc4fb840234954705f56e65d52ae7aa5260\""
+        },
+        "name": "MEMORY.md",
+        "representation_sha256": "a38d5f2b2204f703b84f035c906eddc4fb840234954705f56e65d52ae7aa5260",
+        "source": "memory"
+      },
+      "id": "missing_final_newline",
+      "source_base64": "IyBubyBmaW5hbCBuZXdsaW5l",
+      "source_byte_length": 18,
+      "source_sha256": "16046c0bd0f30645a7b41b84c5b68d75fecf52a5148605683a248ac6ad267c1f",
+      "source_version": "sha256:16046c0bd0f30645a7b41b84c5b68d75fecf52a5148605683a248ac6ad267c1f"
+    },
+    {
+      "canonical_200": {
+        "absent_headers": [
+          "Content-Encoding",
+          "Vary"
+        ],
+        "body_base64_chunks": [
+          "eyJieXRlX2VuY29kaW5nIjoiYmFzZTY0IiwiYnl0ZV9sZW5ndGgiOjExLCJjaGVja3N1bSI6eyJh",
+          "bGdvcml0aG0iOiJzaGEtMjU2IiwidmFsdWUiOiIyM2NkMDQyOTdlOTI2NzNiZTUyM2M1NjU3MDIw",
+          "NDQ3YjA1MzRmYWQ0YWM0ZDNiNjYxNGQzZDg1ODhhMzc4ZjUzIn0sImNvbnRlbnRfdHlwZSI6InRl",
+          "eHQvbWFya2Rvd24iLCJkYXRhIjoiWTJGbXc2a2c4SithZ0FvPSIsIm5hbWUiOiJNRU1PUlkubWQi",
+          "LCJzY2hlbWFfdmVyc2lvbiI6MSwic291cmNlIjoibWVtb3J5Iiwic291cmNlX3ZlcnNpb24iOiJz",
+          "aGEyNTY6MjNjZDA0Mjk3ZTkyNjczYmU1MjNjNTY1NzAyMDQ0N2IwNTM0ZmFkNGFjNGQzYjY2MTRk",
+          "M2Q4NTg4YTM3OGY1MyJ9"
+        ],
+        "body_byte_length": 357,
+        "etag": "\"repr-sha256:b26821d86dc4e0353267812dc0e1a979e674286cf6b158f2c085a0403ea50bc2\"",
+        "headers": {
+          "Cache-Control": "private, no-store",
+          "Content-Length": "357",
+          "Content-Type": "application/json; charset=utf-8",
+          "Date": "Wed, 01 Jan 2025 00:00:00 GMT",
+          "ETag": "\"repr-sha256:b26821d86dc4e0353267812dc0e1a979e674286cf6b158f2c085a0403ea50bc2\""
+        },
+        "name": "MEMORY.md",
+        "representation_sha256": "b26821d86dc4e0353267812dc0e1a979e674286cf6b158f2c085a0403ea50bc2",
+        "source": "memory"
+      },
+      "id": "unicode",
+      "source_base64": "Y2Fmw6kg8J+agAo=",
+      "source_byte_length": 11,
+      "source_sha256": "23cd04297e92673be523c5657020447b0534fad4ac4d3b6614d3d8588a378f53",
+      "source_version": "sha256:23cd04297e92673be523c5657020447b0534fad4ac4d3b6614d3d8588a378f53"
+    },
+    {
+      "canonical_200": {
+        "absent_headers": [
+          "Content-Encoding",
+          "Vary"
+        ],
+        "body_base64_chunks": [
+          "eyJieXRlX2VuY29kaW5nIjoiYmFzZTY0IiwiYnl0ZV9sZW5ndGgiOjUsImNoZWNrc3VtIjp7ImFs",
+          "Z29yaXRobSI6InNoYS0yNTYiLCJ2YWx1ZSI6ImNkMzQwNjNlNWM4MmMyYzIyMmIxYjY0MWJkMmUy",
+          "MTY3OWU0N2ExYzdkOGYwNDliOGEzMDU4OTQwZmJjZjM1MWMifSwiY29udGVudF90eXBlIjoidGV4",
+          "dC9tYXJrZG93biIsImRhdGEiOiJiMnYvL2dvPSIsIm5hbWUiOiJNRU1PUlkubWQiLCJzY2hlbWFf",
+          "dmVyc2lvbiI6MSwic291cmNlIjoibWVtb3J5Iiwic291cmNlX3ZlcnNpb24iOiJzaGEyNTY6Y2Qz",
+          "NDA2M2U1YzgyYzJjMjIyYjFiNjQxYmQyZTIxNjc5ZTQ3YTFjN2Q4ZjA0OWI4YTMwNTg5NDBmYmNm",
+          "MzUxYyJ9"
+        ],
+        "body_byte_length": 348,
+        "etag": "\"repr-sha256:24ad644e8b0ce074bc0f9faea3fee4fbc36a6776613d5addb316d83775d5e8f6\"",
+        "headers": {
+          "Cache-Control": "private, no-store",
+          "Content-Length": "348",
+          "Content-Type": "application/json; charset=utf-8",
+          "Date": "Wed, 01 Jan 2025 00:00:00 GMT",
+          "ETag": "\"repr-sha256:24ad644e8b0ce074bc0f9faea3fee4fbc36a6776613d5addb316d83775d5e8f6\""
+        },
+        "name": "MEMORY.md",
+        "representation_sha256": "24ad644e8b0ce074bc0f9faea3fee4fbc36a6776613d5addb316d83775d5e8f6",
+        "source": "memory"
+      },
+      "id": "malformed_utf8",
+      "source_base64": "b2v//go=",
+      "source_byte_length": 5,
+      "source_sha256": "cd34063e5c82c2c222b1b641bd2e21679e47a1c7d8f049b8a3058940fbcf351c",
+      "source_version": "sha256:cd34063e5c82c2c222b1b641bd2e21679e47a1c7d8f049b8a3058940fbcf351c"
+    }
+  ],
+  "conditional_304": {
+    "absent_headers": [
+      "Content-Length",
+      "Content-Type",
+      "Content-Encoding",
+      "Vary",
+      "Trailer"
+    ],
+    "body_base64": "",
+    "case_id": "lf",
+    "headers": {
+      "Cache-Control": "private, no-store",
+      "Date": "Wed, 01 Jan 2025 00:00:00 GMT",
+      "ETag": "\"repr-sha256:8f85cc4d4f79e33cf20327f216df9ddaba87799b17c033ade0620848d24036db\""
+    },
+    "request_headers": {
+      "If-None-Match": "\"repr-sha256:8f85cc4d4f79e33cf20327f216df9ddaba87799b17c033ade0620848d24036db\""
+    },
+    "status": 304,
+    "trailers_absent": true
+  },
+  "fixture": "memory_raw_v1_complete_response_cases",
+  "provenance_cases": [
+    {
+      "headers": [
+        [
+          "Host",
+          "example.test"
+        ]
+      ],
+      "id": "native_no_browser_metadata",
+      "status": 200
+    },
+    {
+      "headers": [
+        [
+          "Host",
+          "example.test"
+        ],
+        [
+          "Origin",
+          "https://example.test"
+        ],
+        [
+          "Referer",
+          "https://example.test/memory"
+        ],
+        [
+          "Sec-Fetch-Site",
+          "same-origin"
+        ],
+        [
+          "Sec-Fetch-Mode",
+          "cors"
+        ],
+        [
+          "Sec-Fetch-Dest",
+          "empty"
+        ]
+      ],
+      "id": "browser_same_origin",
+      "status": 200
+    },
+    {
+      "headers": [
+        [
+          "Host",
+          "example.test"
+        ],
+        [
+          "Host",
+          "example.test"
+        ]
+      ],
+      "id": "duplicate_host",
+      "status": 403
+    },
+    {
+      "headers": [
+        [
+          "Host",
+          "example.test"
+        ],
+        [
+          "Origin",
+          "https://evil.test"
+        ]
+      ],
+      "id": "origin_mismatch",
+      "status": 403
+    },
+    {
+      "headers": [
+        [
+          "Host",
+          "example.test"
+        ],
+        [
+          "Referer",
+          "https://evil.test/x"
+        ]
+      ],
+      "id": "referer_mismatch",
+      "status": 403
+    },
+    {
+      "headers": [
+        [
+          "Host",
+          "example.test"
+        ],
+        [
+          "Sec-Fetch-Mode",
+          "cors"
+        ],
+        [
+          "Sec-Fetch-Dest",
+          "empty"
+        ]
+      ],
+      "id": "fetch_without_site",
+      "status": 403
+    },
+    {
+      "headers": [
+        [
+          "Host",
+          "example.test"
+        ],
+        [
+          "Sec-Fetch-Site",
+          "same-origin"
+        ],
+        [
+          "Sec-Fetch-Mode",
+          "cors"
+        ],
+        [
+          "Sec-Fetch-Dest",
+          "empty"
+        ],
+        [
+          "Sec-Fetch-User",
+          "?1"
+        ]
+      ],
+      "id": "unknown_fetch_header",
+      "status": 403
+    },
+    {
+      "headers": [
+        [
+          "Host",
+          "example.test"
+        ],
+        [
+          "X-Forwarded-Host",
+          "evil.test"
+        ],
+        [
+          "X-Forwarded-Proto",
+          "http"
+        ]
+      ],
+      "id": "forwarded_ignored_when_disabled",
+      "status": 200,
+      "trust_forwarded_host": false,
+      "trust_forwarded_proto": false
+    },
+    {
+      "headers": [
+        [
+          "Host",
+          "example.test"
+        ],
+        [
+          "X-Forwarded-Host",
+          "example.test,evil.test"
+        ],
+        [
+          "X-Forwarded-Proto",
+          "https"
+        ]
+      ],
+      "id": "malformed_forwarded_when_enabled",
+      "status": 403,
+      "trust_forwarded_host": true,
+      "trust_forwarded_proto": true
+    }
+  ],
+  "provenance_precondition": "Every case assumes one validated incoming session cookie bound to the authorized profile. No credential value is stored.",
+  "schema_version": 1,
+  "endpoint": "/api/memory/raw",
+  "headers": {
+    "content_type": "application/json; charset=utf-8",
+    "cache_control": "private, no-store",
+    "content_length": "exact UTF-8 byte length of the uncompressed JSON body",
+    "date": "current HTTP date for 200/304 responses (fixture uses a fixed Date for determinism)",
+    "etag": "\"repr-sha256:<64 lowercase hex>\"",
+    "compression": "disabled unconditionally; no Content-Encoding and no Vary for any Accept-Encoding",
+    "304_omits": [
+      "Content-Length",
+      "Content-Type",
+      "Content-Encoding"
+    ],
+    "304_trailers": "absent"
+  },
+  "if_none_match": {
+    "combine": "all If-None-Match field instances in received order, then comma-parse one combined value with OWS-trimmed members",
+    "accepted": [
+      "*",
+      "\"repr-sha256:<64 lowercase hex>\""
+    ],
+    "weak": "W/\"repr-sha256:<64 lowercase hex>\" compares equal for this GET",
+    "malformed_members": "ignored",
+    "when_matching": "authenticated bodyless 304 with current ETag, Date, and Cache-Control; no Content-Length, Content-Type, Content-Encoding, Vary, or trailers; never Content-Length: 0",
+    "never": "a missing, mutated, unsupported, disabled, or oversized source is never converted into 304"
+  },
+  "request_framing": {
+    "cookie_fields": "combined in received order; configured auth cookie occurs exactly once; profile cookie zero-or-one; malformed cookie syntax rejected",
+    "body_framing": "positive Content-Length or any Transfer-Encoding (including chunked, list, or duplicate) forces Connection: close without consuming the body; a lone Content-Length: 0 with no transfer-encoding may stay keep-alive",
+    "host": "exactly one Host field; duplicate/missing/empty/list/ambiguous Host rejected",
+    "sec_fetch": "one field per name or reject; list syntax rejected; only Sec-Fetch-Site/Mode/Dest accepted"
+  },
+  "errors": [
+    {
+      "case": "malformed/duplicate/unknown query",
+      "status": 400,
+      "body": "{\"error\":\"invalid_request\"}"
+    },
+    {
+      "case": "missing/invalid/expired/duplicate/empty cookie",
+      "status": 401,
+      "body": "{\"error\":\"authentication_required\"}"
+    },
+    {
+      "case": "auth disabled, profile/provenance mismatch, disabled source",
+      "status": 403,
+      "body": "{\"error\":\"forbidden\"}"
+    },
+    {
+      "case": "missing/foreign session, invalid default workspace, missing source, unsafe candidate",
+      "status": 404,
+      "body": "{\"error\":\"not_found\"}"
+    },
+    {
+      "case": "source mutation/short-read EOF before stable size/identity/namespace mismatch",
+      "status": 409,
+      "body": "{\"error\":\"source_changed\"}"
+    },
+    {
+      "case": "source exceeds configured limit",
+      "status": 413,
+      "body": "{\"error\":\"source_too_large\"}"
+    },
+    {
+      "case": "four-read-slot exhaustion",
+      "status": 503,
+      "body": "{\"error\":\"raw_read_busy\"}",
+      "headers": {
+        "Retry-After": "1"
+      }
+    },
+    {
+      "case": "invalid limit or unsupported read guarantee or auth_state_unavailable",
+      "status": 503,
+      "body": "{\"error\":\"raw_unavailable\"}"
+    },
+    {
+      "case": "non-GET method",
+      "status": 405,
+      "body": "{\"error\":\"method_not_allowed\"}",
+      "headers": {
+        "Allow": "GET"
+      }
+    }
+  ],
+  "capability_supported": {
+    "available": true,
+    "endpoint": "/api/memory/raw",
+    "schema_version": 1,
+    "sources": [
+      "memory",
+      "user",
+      "soul",
+      "project_context"
+    ],
+    "representation_etag": {
+      "algorithm": "sha-256",
+      "scope": "canonical_uncompressed_200_json_utf8",
+      "format": "quoted_repr_sha256",
+      "pattern": "\"repr-sha256:<64 lowercase hex>\""
+    },
+    "conditional_requests": {
+      "request_header": "If-None-Match",
+      "accepted_forms": [
+        "strong",
+        "weak",
+        "*"
+      ],
+      "weak_comparison": true,
+      "malformed_members": "ignored",
+      "304_body": "absent"
+    }
+  },
+  "capability_unsupported": {
+    "available": false
+  },
+  "etag_scope": "ETags are scoped to the named canonical full-response envelope (canonical_uncompressed_200_json_utf8); byte cases alone do not receive a source-hash ETag."
+}
