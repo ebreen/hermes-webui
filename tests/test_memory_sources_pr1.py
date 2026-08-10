@@ -25,14 +25,11 @@ Still no public dispatch and no capability: the route is not reachable over
 HTTP and /api/system/health does not advertise memory_raw_v1 (PR 2).
 """
 import base64
-import dataclasses
 import hashlib
 import json
 import os
-import stat
 import sys
 import threading
-import time
 from pathlib import Path
 from types import SimpleNamespace
 
