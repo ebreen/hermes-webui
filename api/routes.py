@@ -31,7 +31,7 @@ import socket as _socket
 from collections import defaultdict, deque
 from pathlib import Path
 from contextlib import closing
-from urllib.parse import parse_qs, quote, unquote, urljoin, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse, urlsplit
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 from api.agent_runtime import (
@@ -12567,6 +12567,75 @@ def raw_capability() -> dict:
             "304_body": "absent",
         },
     }
+
+
+# Exact raw memory route path (hermex #58 §4): only this exact parsed path is
+# the route; the server dispatches it before any generic auth/profile/body work.
+_RAW_MEMORY_PATH = "/api/memory/raw"
+
+
+def is_raw_memory_path(path: str) -> bool:
+    """Exact-path match for the raw memory route (hermex #58 §4).
+
+    Only ``parsed.path == "/api/memory/raw"`` is this route — never
+    ``/api/memory/raw/``, ``/api/memory/rawish``, or encoded aliases.
+    """
+    try:
+        return urlparse(path).path == _RAW_MEMORY_PATH
+    except Exception:
+        return False
+
+
+def dispatch_raw_memory_route(handler) -> bool:
+    """Early exact-path dispatch for ``/api/memory/raw`` (§4).
+
+    Runs BEFORE any profile-cookie extraction, request-profile setup,
+    generic authentication, trusted-header processing, session
+    visibility checks, CSRF handling, request-body reads, global OPTIONS
+    handling, or generic 404 handling. Returns True when the raw route
+    handled the request; the caller returns directly. Duck-typed fakes
+    without ``path``/the dispatch method are safe: no dispatch happens.
+    """
+    if not is_raw_memory_path(getattr(handler, "path", None) or "-"):
+        return False
+    handle_raw_memory_route(handler, urlparse(handler.path))
+    return True
+
+
+def raw_request_log_record(handler, code="-", size="-") -> str:
+    """Structured request-log JSON line (§5/§11).
+
+    The raw memory route (exact ``/api/memory/raw`` path) logs a FIXED
+    route label only — never ``handler.path`` (which carries the query
+    string), cookies, forwarded identity, or the remote address. All
+    other requests keep the previous record shape.
+    """
+    duration_ms = round((time.time() - getattr(handler, "_req_t0", time.time())) * 1000, 1)
+    record_data = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "method": getattr(handler, "command", None) or "-",
+        "status": int(code) if str(code).isdigit() else code,
+        "ms": duration_ms,
+    }
+    if is_raw_memory_path(getattr(handler, "path", None) or "-"):
+        record_data["path"] = _RAW_MEMORY_PATH
+    else:
+        remote = "-"
+        try:
+            if getattr(handler, "client_address", None):
+                remote = str(handler.client_address[0])
+        except Exception:
+            remote = "-"
+        forwarded_for = None
+        try:
+            forwarded_for = (handler.headers.get("X-Forwarded-For") or "").split(",")[0].strip() or None
+        except Exception:
+            forwarded_for = None
+        record_data["remote"] = remote
+        record_data["path"] = getattr(handler, "path", None) or "-"
+        if forwarded_for:
+            record_data["forwarded_for"] = forwarded_for
+    return json.dumps(record_data)
 
 
 def handle_raw_memory_route(handler, parsed) -> None:

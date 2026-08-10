@@ -99,10 +99,6 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
-# Exact raw memory route path (hermex #58 §4): only this exact parsed path is
-# the route; the server dispatches it before any generic auth/profile/body work.
-_RAW_MEMORY_PATH = "/api/memory/raw"
-
 from api.auth import check_auth, reset_trusted_auth_request_state
 from api.config import HOST, PORT, STATE_DIR, SESSION_DIR, DEFAULT_WORKSPACE
 from api.helpers import (
@@ -113,14 +109,10 @@ from api.helpers import (
 )
 from api.profiles import set_request_profile, clear_request_profile
 from api.routes import (
-    handle_delete,
-    handle_get,
-    handle_patch,
-    handle_post,
-    handle_put,
-    handle_raw_memory_route,
+    handle_delete, handle_get, handle_patch, handle_post, handle_put,
     apply_cors_preflight_headers,
 )
+from api.routes import dispatch_raw_memory_route, raw_request_log_record
 from api.startup import auto_install_agent_deps, fix_credential_permissions
 from api.updates import WEBUI_VERSION
 from api.crash_visibility import install_crash_visibility
@@ -356,72 +348,15 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def log_request(self, code: str='-', size: str='-') -> None:
-        """Structured JSON logs for each request.
-
-        The raw memory route (exact ``/api/memory/raw`` path) logs a FIXED
-        route label only — never ``self.path`` (which carries the query
-        string), cookies, forwarded identity, or the remote address (§5/§11
-        of hermex #58). All other requests keep the previous record shape.
-        """
-        import json as _json
-        duration_ms = round((time.time() - getattr(self, '_req_t0', time.time())) * 1000, 1)
-        record_data = {
-            'ts': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-            'method': getattr(self, 'command', None) or '-',
-            'status': int(code) if str(code).isdigit() else code,
-            'ms': duration_ms,
-        }
-        if self._is_raw_memory_path(getattr(self, 'path', None) or '-'):
-            record_data['path'] = _RAW_MEMORY_PATH
-        else:
-            remote = '-'
-            try:
-                if getattr(self, 'client_address', None):
-                    remote = str(self.client_address[0])
-            except Exception:
-                remote = '-'
-            forwarded_for = None
-            try:
-                forwarded_for = (self.headers.get('X-Forwarded-For') or '').split(',')[0].strip() or None
-            except Exception:
-                forwarded_for = None
-            record_data['remote'] = remote
-            record_data['path'] = getattr(self, 'path', None) or '-'
-            if forwarded_for:
-                record_data['forwarded_for'] = forwarded_for
-        record = _json.dumps(record_data)
-        self._safe_webui_print(f'[webui] {record}')
-
-    @staticmethod
-    def _is_raw_memory_path(path: str) -> bool:
-        """Exact-path match for the raw memory route (hermex #58 §4).
-
-        Only ``parsed.path == "/api/memory/raw"`` is this route — never
-        ``/api/memory/raw/``, ``/api/memory/rawish``, or encoded aliases.
-        """
-        try:
-            return urlparse(path).path == _RAW_MEMORY_PATH
-        except Exception:
-            return False
+        """Structured JSON logs; the raw route logs a fixed label only (§5/§11)."""
+        self._safe_webui_print(f'[webui] {raw_request_log_record(self, code, size)}')
 
     def _dispatch_raw_memory_route(self) -> bool:
-        """Early exact-path dispatch for ``/api/memory/raw`` (§4).
-
-        Runs BEFORE any profile-cookie extraction, request-profile setup,
-        generic authentication, trusted-header processing, session
-        visibility checks, CSRF handling, request-body reads, global OPTIONS
-        handling, or generic 404 handling. Returns True when the raw route
-        handled the request; the caller returns directly.
-        """
-        if not self._is_raw_memory_path(self.path):
-            return False
-        handle_raw_memory_route(self, urlparse(self.path))
-        return True
+        return dispatch_raw_memory_route(self)
 
     def do_GET(self) -> None:
         self._req_t0 = time.time()
-        if self._dispatch_raw_memory_route():
-            return
+        if getattr(self, "_dispatch_raw_memory_route", lambda: False)(): return
         reset_trusted_auth_request_state(self)
         cookie_profile = get_profile_cookie(self)
         if cookie_profile:
@@ -476,27 +411,23 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         self._req_t0 = time.time()
-        if self._dispatch_raw_memory_route():
-            return
+        if getattr(self, "_dispatch_raw_memory_route", lambda: False)(): return
         self._handle_write(handle_post)
 
     def do_PUT(self) -> None:
         self._req_t0 = time.time()
-        if self._dispatch_raw_memory_route():
-            return
+        if getattr(self, "_dispatch_raw_memory_route", lambda: False)(): return
         self._handle_write(handle_put)
 
     def do_PATCH(self) -> None:
         self._req_t0 = time.time()
-        if self._dispatch_raw_memory_route():
-            return
+        if getattr(self, "_dispatch_raw_memory_route", lambda: False)(): return
         self._handle_write(handle_patch)
 
     def do_OPTIONS(self) -> None:
         """Handle CORS preflight requests (headers emitted by api.routes)."""
         self._req_t0 = time.time()
-        if self._dispatch_raw_memory_route():
-            return
+        if getattr(self, "_dispatch_raw_memory_route", lambda: False)(): return
         self.send_response(200)
         apply_cors_preflight_headers(self)
         # Frame the empty preflight: without Content-Length an HTTP/1.1 keep-alive
@@ -506,16 +437,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         self._req_t0 = time.time()
-        if self._dispatch_raw_memory_route():
-            return
+        if getattr(self, "_dispatch_raw_memory_route", lambda: False)(): return
         self._handle_write(handle_delete)
 
     def do_HEAD(self) -> None:
-        """HEAD support. The raw route owns its exact-path contract (§4);
-        other paths keep the framework's default 501 behavior."""
+        """HEAD: the raw route owns its exact-path contract (§4); others keep 501."""
         self._req_t0 = time.time()
-        if self._dispatch_raw_memory_route():
-            return
+        if getattr(self, "_dispatch_raw_memory_route", lambda: False)(): return
         self.send_error(501, "Unsupported method (HEAD)")
 
 

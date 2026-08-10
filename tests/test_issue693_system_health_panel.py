@@ -257,7 +257,7 @@ def test_system_health_route_returns_only_sanitized_payload(monkeypatch):
     assert routes.handle_get(handler, urlparse("http://example.test/api/system/health")) is True
     payload = handler.json_body()
     assert payload["cpu"]["percent"] == 12.0
-    assert set(payload) == {"status", "available", "checked_at", "cpu", "memory", "disk", "errors"}
+    assert set(payload) == {"status", "available", "checked_at", "cpu", "memory", "disk", "errors", "capabilities"}
 
 
 def test_system_health_panel_markup_and_styles_live_under_insights_not_top_chrome():
