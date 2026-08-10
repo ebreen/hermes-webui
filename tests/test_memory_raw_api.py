@@ -435,6 +435,15 @@ class TestMethodDispatch:
         assert "content-length" not in h
         assert "content-type" not in h
 
+    def test_params_suffix_does_not_dispatch(self, raw_env):
+        # urlparse strips a ";params" suffix from the final path segment;
+        # the exact-path contract must reject it (security review finding).
+        status, headers, body = _request(
+            raw_env.port, "GET", _ENDPOINT + ";x", headers={"Host": "example.test"}
+        )
+        assert status == 404, body
+        assert b"memory" not in body.lower() or status != 200
+
 
 class TestProvenance:
     """§8/§13 — all nine fixture provenance vectors over the wire."""

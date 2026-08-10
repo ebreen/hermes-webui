@@ -12578,10 +12578,13 @@ def is_raw_memory_path(path: str) -> bool:
     """Exact-path match for the raw memory route (hermex #58 §4).
 
     Only ``parsed.path == "/api/memory/raw"`` is this route — never
-    ``/api/memory/raw/``, ``/api/memory/rawish``, or encoded aliases.
+    ``/api/memory/raw/``, ``/api/memory/raw;x`` (urlparse strips the
+    ``;params`` suffix, so an exact match must also require an empty
+    ``params``), ``/api/memory/rawish``, or encoded aliases.
     """
     try:
-        return urlparse(path).path == _RAW_MEMORY_PATH
+        parsed = urlparse(path)
+        return parsed.path == _RAW_MEMORY_PATH and parsed.params == ""
     except Exception:
         return False
 
