@@ -626,7 +626,12 @@ def _prewarm_skill_tool_modules():
 
 
 # Lazy import to avoid circular deps -- hermes-agent is on sys.path via api/config.py
-from api.agent_runtime import ensure_agent_runtime_current, get_ai_agent_class
+from api.agent_runtime import (
+    create_ai_agent,
+    ensure_agent_runtime_current,
+    get_ai_agent_class,
+    provider_routing_agent_kwargs,
+)
 
 
 # Eagerly attempt the import at startup, matching the pre-guard behavior. If
@@ -9356,6 +9361,21 @@ def _run_agent_streaming(
                     )
                 ),
             )
+            # Keep OpenRouter/Nous serving-provider restrictions aligned with
+            # the active profile. All normal, ephemeral, and credential-heal
+            # constructions below reuse this kwargs map.
+            _provider_routing_kwargs = provider_routing_agent_kwargs(
+                _cfg,
+                supported_params=_agent_params,
+            )
+
+            def _construct_agent(agent_kwargs):
+                return create_ai_agent(
+                    _AIAgent,
+                    config_data=_cfg,
+                    supported_params=_agent_params,
+                    **agent_kwargs,
+                )
             # reasoning_config has been an AIAgent param for several releases,
             # but guard defensively to avoid TypeError on an older agent build.
             if 'reasoning_config' in _agent_params and _reasoning_config is not None:
@@ -9396,7 +9416,7 @@ def _run_agent_streaming(
             # Mirrors gateway _agent_cache.  Keeps _user_turn_count alive so
             # injectionFrequency: "first-turn" actually suppresses after turn 1.
             if ephemeral:
-                agent = _AIAgent(**_agent_kwargs)
+                agent = _construct_agent(_agent_kwargs)
                 logger.debug('[webui] Created ephemeral agent for session %s', session_id)
             else:
                 import hashlib as _hashlib
@@ -9418,6 +9438,7 @@ def _run_agent_streaming(
                     sorted(_toolsets) if _toolsets else [],
                     _reasoning_config or {},
                     _main_request_overrides or {},
+                    _provider_routing_kwargs,
                     _public_prefill_context_status(_prefill_context),
                     # #1897: profile_home is part of the agent's identity because
                     # AIAgent caches `_cached_system_prompt` from `load_soul_md()`
@@ -9522,7 +9543,7 @@ def _run_agent_streaming(
                     if hasattr(agent, '_interrupt_message'):
                         agent._interrupt_message = None
                 else:
-                    agent = _AIAgent(**_agent_kwargs)
+                    agent = _construct_agent(_agent_kwargs)
                     # Register the new agent with the memory lifecycle so
                     # its commit_memory_session() can be found later.
                     try:
@@ -10212,7 +10233,7 @@ def _run_agent_streaming(
                             _replace_session_db_in_kwargs(_agent_kwargs, _state_db_path)
                             if 'credential_pool' in _agent_params:
                                 _agent_kwargs['credential_pool'] = _heal_rt.get('credential_pool')
-                            agent = _AIAgent(**_agent_kwargs)
+                            agent = _construct_agent(_agent_kwargs)
                             with STREAMS_LOCK:
                                 AGENT_INSTANCES[stream_id] = agent
                             from api.config import SESSION_AGENT_CACHE as _SAC, SESSION_AGENT_CACHE_LOCK as _SAC_L
@@ -11446,7 +11467,7 @@ def _run_agent_streaming(
                     _replace_session_db_in_kwargs(_heal_kwargs, _state_db_path)
                     if 'credential_pool' in _agent_params:
                         _heal_kwargs['credential_pool'] = _heal_rt.get('credential_pool')
-                    _heal_agent = _AIAgent(**_heal_kwargs)
+                    _heal_agent = _construct_agent(_heal_kwargs)
                     with STREAMS_LOCK:
                         AGENT_INSTANCES[stream_id] = _heal_agent
                     from api.config import SESSION_AGENT_CACHE as _SAC2, SESSION_AGENT_CACHE_LOCK as _SAC2_L

@@ -282,18 +282,24 @@ the agent finishes. The frontend never uses it but it can be useful for debuggin
 
 1. Fetches session from SESSIONS (not from disk -- session was just updated by /api/chat/start)
 2. Sets TERMINAL_CWD, HERMES_EXEC_ASK, HERMES_SESSION_KEY env vars
-3. Creates AIAgent with:
-   - model=model, platform='cli', quiet_mode=True
+3. Creates AIAgent through `api.agent_runtime.create_ai_agent()` with:
+   - model=model, platform='webui', quiet_mode=True
    - enabled_toolsets=CLI_TOOLSETS (from config.yaml or hardcoded default)
    - session_id=session_id
    - stream_delta_callback=on_token (fires per token)
    - tool_progress_callback=on_tool (fires per tool invocation)
-4. Calls agent.run_conversation(user_message=msg_text, conversation_history=s.messages,
+   - the active profile's top-level `provider_routing` mapped to the Agent's
+     `providers_allowed`, `providers_ignored`, `providers_order`, `provider_sort`,
+     `provider_require_parameters`, and `provider_data_collection` parameters
+4. Includes the resolved provider-routing kwargs in the streaming agent cache
+   identity. Changing `provider_routing` therefore creates a new agent instead of
+   reusing one built with stale serving-provider restrictions.
+5. Calls agent.run_conversation(user_message=msg_text, conversation_history=s.messages,
                                  task_id=session_id)
    NOTE: keyword is task_id NOT session_id (common mistake, documented in skill)
-5. On return: updates s.messages, calls title_from(), saves session
-6. Puts ('done', {session: ...}) into queue
-7. Finally block: restores env vars, pops stream_id from STREAMS
+6. On return: updates s.messages, calls title_from(), saves session
+7. Puts ('done', {session: ...}) into queue
+8. Finally block: restores env vars, pops stream_id from STREAMS
 
 on_token callback:
     if text is None: return  # end-of-stream sentinel from AIAgent

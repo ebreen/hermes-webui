@@ -36,6 +36,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 from api.agent_runtime import (
     AgentRuntimeChangedError,
+    create_ai_agent,
     ensure_agent_runtime_current,
     require_ai_agent_class,
 )
@@ -17204,7 +17205,8 @@ def handle_post(handler, parsed) -> bool:
 
                 AIAgent = require_ai_agent_class()
 
-                agent = AIAgent(
+                agent = create_ai_agent(
+                    AIAgent,
                     model=_main_model,
                     provider=_main_provider,
                     base_url=_main_base_url,
@@ -23358,7 +23360,8 @@ def _handle_chat_sync(handler, body):
                     _api_key = _cp_key
                 if not _base_url and _cp_base:
                     _base_url = _cp_base
-            agent = AIAgent(
+            agent = create_ai_agent(
+                AIAgent,
                 model=_model,
                 provider=_provider,
                 base_url=_base_url,
@@ -23972,7 +23975,8 @@ def _llm_git_commit_message(system_prompt: str, user_prompt: str, session=None) 
 
         AIAgent = require_ai_agent_class()
 
-        agent = AIAgent(
+        agent = create_ai_agent(
+            AIAgent,
             model=_main_model,
             provider=_main_provider,
             base_url=_main_base_url,
@@ -25670,7 +25674,8 @@ def _handle_session_compress(handler, body):
         )
         approx_tokens = _estimate_messages_tokens_rough(original_messages)
 
-        agent = AIAgent(
+        agent = create_ai_agent(
+            AIAgent,
             model=resolved_model,
             provider=resolved_provider,
             base_url=resolved_base_url,
@@ -26350,7 +26355,8 @@ def _handle_handoff_summary(handler, body):
                 "fallback": True,
             })
 
-        agent = AIAgent(
+        agent = create_ai_agent(
+            AIAgent,
             model=resolved_model,
             provider=resolved_provider,
             base_url=resolved_base_url,
